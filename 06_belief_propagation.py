@@ -17,9 +17,8 @@ DATASET_DIR = Path("dataset")
 MODEL_DIR   = Path("data/models"); MODEL_DIR.mkdir(parents=True, exist_ok=True)
 OUT_DIR     = Path("outputs"); OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-LAMBDA_PAIRWISE = 0.5
-N_ITERS = 20
-
+LAMBDA_PAIRWISE = 0.25
+N_ITERS = 10
 
 # ENERGY
 def compute_energy(labels, unary, adjacency, lam, weights):
@@ -29,7 +28,7 @@ def compute_energy(labels, unary, adjacency, lam, weights):
         for j in adjacency[i]:
             if i < j and labels[i] != labels[j]:
                 w = weights.get((i, j), 1.0)
-                E += lam * w 
+                E += lam * w
 
     return E
 
@@ -49,24 +48,99 @@ def to_adj_dict(adjacency):
 
     raise TypeError("Unsupported adjacency type")
 
+# NEW: SUPERPIXEL COLORS
+def compute_superpixel_colors(image, segments):
+    sp_ids = np.unique(segments)
+    colors = np.zeros((len(sp_ids), 3))
 
-# PAIRWISE WEIGHTS
-def compute_pairwise_weights(adjacency, features, beta=0.1):
+    for i, sp_id in enumerate(sp_ids):
+        mask = segments == sp_id
+        colors[i] = image[mask].mean(axis=0)
+
+    return colors
+
+# PAIRWISE WEIGHTS (COLOR-BASED)
+def compute_pairwise_weights(adjacency, colors, beta=0.05):
     weights = {}
 
     for i in adjacency:
         for j in adjacency[i]:
-            diff = np.linalg.norm(features[i] - features[j])
+            diff = np.linalg.norm(colors[i] - colors[j])
             w = np.exp(-beta * diff**2)
 
             weights[(i, j)] = w
-            weights[(j, i)] = w 
+            weights[(j, i)] = w
 
     return weights
 
 
 # BELIEF PROPAGATION
-def belief_propagation(unary, adjacency, weights, n_iters=20, lam=0.5,
+def belief_propagation_reparametrization(unary, adjacency, weights, n_iters=20, lam=0.5,
+                      damping=0.0, track_energy=False):
+
+    N, L = unary.shape
+
+    adj = to_adj_dict(adjacency)
+    for i in list(adj.keys()):
+        for j in adj[i]:
+            adj.setdefault(j, set()).add(i)
+    adj = {i: list(v) for i, v in adj.items()}
+
+    theta = unary.copy()
+
+    energy_curve = []
+
+    for _ in range(n_iters):
+
+        for i in range(N):
+            for j in adj[i]:
+
+                w = weights.get((i, j), 1.0)
+
+                # COMPUTE MESSAGE (M_ij)
+                M = np.zeros(L)
+
+                for lj in range(L):
+
+                    vals = []
+
+                    for li in range(L):
+
+                        # Potts pairwise
+                        if li == lj:
+                            pairwise = 0
+                        else:
+                            pairwise = lam * w
+
+                        vals.append(theta[i, li] + pairwise)
+
+                    M[lj] = min(vals)
+
+                # REPARAMETRIZATION
+                # theta_j += M_ij
+                theta[j] += M
+
+                # normalisation
+                theta[j] -= theta[j].min()
+
+        # ENERGY TRACKING
+        if track_energy:
+
+            labels_tmp = np.argmin(theta, axis=1)
+
+            adj_list = {i: adj[i] for i in range(N)}
+            energy = compute_energy(labels_tmp, unary, adj_list, lam, weights)
+
+            energy_curve.append(energy)
+
+    # FINAL LABELS
+    labels = np.argmin(theta, axis=1)
+
+    if track_energy:
+        return labels, energy_curve
+    return labels
+
+def belief_propagation_messages(unary, adjacency, weights, n_iters=20, lam=0.5,
                       damping=0.5, track_energy=False):
 
     N, L = unary.shape
@@ -88,7 +162,7 @@ def belief_propagation(unary, adjacency, weights, n_iters=20, lam=0.5,
         for i in range(N):
             for j in adj[i]:
 
-                # messages entrants
+                # messages
                 msg = unary[i].copy()
                 for k in adj[i]:
                     if k != j:
@@ -96,6 +170,7 @@ def belief_propagation(unary, adjacency, weights, n_iters=20, lam=0.5,
 
                 w = weights.get((i, j), 1.0)
 
+                # BP Potts
                 min_msg = msg.min()
 
                 new_msg = np.zeros(L)
@@ -105,6 +180,7 @@ def belief_propagation(unary, adjacency, weights, n_iters=20, lam=0.5,
                         min_msg + lam * w
                     )
 
+                # normalisation
                 new_msg -= new_msg.min()
 
                 # damping
@@ -161,9 +237,11 @@ def load_split_data(ds, indices):
 
 
 # INFERENCE PER IMAGE
-def run_bp_on_image(ft, sp, clf, scaler, track_energy=False):
+def run_bp_on_image(image, ft, sp, clf, scaler, track_energy=False, reparametrization=True):
     feats = ft["features"]
     segments = sp["segments"]
+    
+    colors = compute_superpixel_colors(image, segments)
 
     X = scaler.transform(feats)
     probas = clf.predict_proba(X)
@@ -172,26 +250,36 @@ def run_bp_on_image(ft, sp, clf, scaler, track_energy=False):
     adj_matrix = build_adjacency(segments)
     adjacency = to_adj_dict(adj_matrix)
 
-    weights = compute_pairwise_weights(adjacency, feats, beta=0.1)
-
+    weights = compute_pairwise_weights(adjacency, colors, beta=0.05)
     if track_energy:
-        preds, energy_curve = belief_propagation(
-            unary, adjacency, weights,
-            N_ITERS, LAMBDA_PAIRWISE,
-            track_energy=True
-        )
+        if reparametrization:
+            preds, energy_curve = belief_propagation_reparametrization(
+                unary, adjacency, weights,
+                N_ITERS, LAMBDA_PAIRWISE,
+                track_energy=True
+            )
+        else:
+            preds, energy_curve = belief_propagation_messages(
+                unary, adjacency, weights,
+                N_ITERS, LAMBDA_PAIRWISE,
+                track_energy=True
+            )
     else:
-        preds = belief_propagation(
-            unary, adjacency, weights,
-            N_ITERS, LAMBDA_PAIRWISE
-        )
+        if reparametrization:
+            preds = belief_propagation_reparametrization(
+                unary, adjacency, weights,
+                N_ITERS, LAMBDA_PAIRWISE
+            )
+        else:
+            preds = belief_propagation_messages(
+                unary, adjacency, weights,
+                N_ITERS, LAMBDA_PAIRWISE
+            )
 
     pred_map = np.zeros_like(segments)
     sp_ids = np.unique(segments)
-    id_map = {sp_id: i for i, sp_id in enumerate(sp_ids)}
 
-    for sp_id in sp_ids:
-        i = id_map[sp_id]
+    for i, sp_id in enumerate(sp_ids):
         pred_map[segments == sp_id] = preds[i] + 1
 
     if track_energy:
@@ -200,17 +288,17 @@ def run_bp_on_image(ft, sp, clf, scaler, track_energy=False):
 
 
 # METRICS
-def pixel_accuracy_bp(ds, indices, clf, scaler):
+def pixel_accuracy_bp(ds, indices, clf, scaler, reparametrization=True):
     correct = total = 0
 
     for idx in indices:
-        _, label_map, m = ds[idx]
+        image, label_map, m = ds[idx]
         ft = load_ft(m["imname"])
         sp = load_sp(m["imname"])
         if ft is None or sp is None:
             continue
 
-        pred_map = run_bp_on_image(ft, sp, clf, scaler)
+        pred_map = run_bp_on_image(image, ft, sp, clf, scaler, reparametrization=reparametrization)
 
         valid = label_map > 0
         correct += (pred_map[valid] == label_map[valid]).sum()
@@ -220,17 +308,17 @@ def pixel_accuracy_bp(ds, indices, clf, scaler):
 
 
 # PLOTS
-def plot_confusion_bp(ds, indices, clf, scaler, save_path):
+def plot_confusion_bp(ds, indices, clf, scaler, save_path, reparametrization=True):
     all_preds, all_true = [], []
 
     for idx in indices[:50]:
-        _, label_map, m = ds[idx]
+        image, label_map, m = ds[idx]
         ft = load_ft(m["imname"])
         sp = load_sp(m["imname"])
         if ft is None or sp is None:
             continue
 
-        pred_map = run_bp_on_image(ft, sp, clf, scaler)
+        pred_map = run_bp_on_image(image, ft, sp, clf, scaler, reparametrization=reparametrization)
 
         valid = label_map > 0
         all_true.extend(label_map[valid].tolist())
@@ -262,7 +350,7 @@ def plot_confusion_bp(ds, indices, clf, scaler, save_path):
     plt.close()
 
 
-def plot_predictions_bp(ds, indices, clf, scaler, save_path, n=6):
+def plot_predictions_bp(ds, indices, clf, scaler, save_path, n=6, reparametrization=True):
     fig, axes = plt.subplots(3, n, figsize=(4*n, 12))
     fig.suptitle("BP predictions", fontsize=13)
 
@@ -273,7 +361,7 @@ def plot_predictions_bp(ds, indices, clf, scaler, save_path, n=6):
         if ft is None or sp is None:
             continue
 
-        pred_map = run_bp_on_image(ft, sp, clf, scaler)
+        pred_map = run_bp_on_image(image, ft, sp, clf, scaler, reparametrization=reparametrization)
 
         valid = label_map > 0
         acc = (pred_map[valid] == label_map[valid]).mean()
@@ -302,18 +390,18 @@ def plot_predictions_bp(ds, indices, clf, scaler, save_path, n=6):
     plt.close()
 
 
-def plot_energy_curves(ds, indices, clf, scaler, save_path, n=5):
+def plot_energy_curves(ds, indices, clf, scaler, save_path, n=5, reparametrization=True):
     fig, ax = plt.subplots(figsize=(6, 4))
 
     for idx in indices[:n]:
-        _, _, m = ds[idx]
+        image, _, m = ds[idx]
         ft = load_ft(m["imname"])
         sp = load_sp(m["imname"])
         if ft is None or sp is None:
             continue
 
         _, energy_curve = run_bp_on_image(
-            ft, sp, clf, scaler, track_energy=True
+            image, ft, sp, clf, scaler, track_energy=True, reparametrization=True
         )
 
         ax.plot(energy_curve, marker="o", markersize=2,
@@ -330,7 +418,7 @@ def plot_energy_curves(ds, indices, clf, scaler, save_path, n=5):
 
 
 # MAIN
-def main():
+def main(reparametrization=True):
     ds = HoiemDataset(root_dir=DATASET_DIR)
     train_ds, test_ds = ds.get_split()
 
