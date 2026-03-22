@@ -17,7 +17,7 @@ DATASET_DIR = Path("dataset")
 MODEL_DIR   = Path("data/models"); MODEL_DIR.mkdir(parents=True, exist_ok=True)
 OUT_DIR     = Path("outputs"); OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-LAMBDA_PAIRWISE = 0.25
+LAMBDA_PAIRWISE = 0.15
 N_ITERS = 10
 
 # ENERGY
@@ -60,13 +60,14 @@ def compute_superpixel_colors(image, segments):
     return colors
 
 # PAIRWISE WEIGHTS (COLOR-BASED)
-def compute_pairwise_weights(adjacency, colors, beta=0.05):
+def compute_pairwise_weights(adjacency, features, beta=0.05):
     weights = {}
 
     for i in adjacency:
         for j in adjacency[i]:
-            diff = np.linalg.norm(colors[i] - colors[j])
-            w = np.exp(-beta * diff**2)
+            diff = features[i] - features[j]
+            d = np.dot(diff, diff)
+            w = np.exp(-beta * d)
 
             weights[(i, j)] = w
             weights[(j, i)] = w
@@ -237,12 +238,10 @@ def load_split_data(ds, indices):
 
 
 # INFERENCE PER IMAGE
-def run_bp_on_image(image, ft, sp, clf, scaler, track_energy=False, reparametrization=True):
+def run_bp_on_image(ft, sp, clf, scaler, track_energy=False, reparametrization=True):
     feats = ft["features"]
     segments = sp["segments"]
     
-    colors = compute_superpixel_colors(image, segments)
-
     X = scaler.transform(feats)
     probas = clf.predict_proba(X)
     unary = -np.log(probas + 1e-6)
@@ -250,7 +249,7 @@ def run_bp_on_image(image, ft, sp, clf, scaler, track_energy=False, reparametriz
     adj_matrix = build_adjacency(segments)
     adjacency = to_adj_dict(adj_matrix)
 
-    weights = compute_pairwise_weights(adjacency, colors, beta=0.05)
+    weights = compute_pairwise_weights(adjacency, X, beta=0.05)
     if track_energy:
         if reparametrization:
             preds, energy_curve = belief_propagation_reparametrization(
@@ -278,8 +277,10 @@ def run_bp_on_image(image, ft, sp, clf, scaler, track_energy=False, reparametriz
 
     pred_map = np.zeros_like(segments)
     sp_ids = np.unique(segments)
+    sp_ids_sorted = np.sort(sp_ids)
 
-    for i, sp_id in enumerate(sp_ids):
+
+    for i, sp_id in enumerate(sp_ids_sorted):
         pred_map[segments == sp_id] = preds[i] + 1
 
     if track_energy:
@@ -292,13 +293,13 @@ def pixel_accuracy_bp(ds, indices, clf, scaler, reparametrization=True):
     correct = total = 0
 
     for idx in indices:
-        image, label_map, m = ds[idx]
+        _, label_map, m = ds[idx]
         ft = load_ft(m["imname"])
         sp = load_sp(m["imname"])
         if ft is None or sp is None:
             continue
 
-        pred_map = run_bp_on_image(image, ft, sp, clf, scaler, reparametrization=reparametrization)
+        pred_map = run_bp_on_image(ft, sp, clf, scaler, reparametrization=reparametrization)
 
         valid = label_map > 0
         correct += (pred_map[valid] == label_map[valid]).sum()
@@ -312,13 +313,13 @@ def plot_confusion_bp(ds, indices, clf, scaler, save_path, reparametrization=Tru
     all_preds, all_true = [], []
 
     for idx in indices[:50]:
-        image, label_map, m = ds[idx]
+        _, label_map, m = ds[idx]
         ft = load_ft(m["imname"])
         sp = load_sp(m["imname"])
         if ft is None or sp is None:
             continue
 
-        pred_map = run_bp_on_image(image, ft, sp, clf, scaler, reparametrization=reparametrization)
+        pred_map = run_bp_on_image(ft, sp, clf, scaler, reparametrization=reparametrization)
 
         valid = label_map > 0
         all_true.extend(label_map[valid].tolist())
@@ -361,7 +362,7 @@ def plot_predictions_bp(ds, indices, clf, scaler, save_path, n=6, reparametrizat
         if ft is None or sp is None:
             continue
 
-        pred_map = run_bp_on_image(image, ft, sp, clf, scaler, reparametrization=reparametrization)
+        pred_map = run_bp_on_image(ft, sp, clf, scaler, reparametrization=reparametrization)
 
         valid = label_map > 0
         acc = (pred_map[valid] == label_map[valid]).mean()
@@ -394,14 +395,14 @@ def plot_energy_curves(ds, indices, clf, scaler, save_path, n=5, reparametrizati
     fig, ax = plt.subplots(figsize=(6, 4))
 
     for idx in indices[:n]:
-        image, _, m = ds[idx]
+        _, _, m = ds[idx]
         ft = load_ft(m["imname"])
         sp = load_sp(m["imname"])
         if ft is None or sp is None:
             continue
 
         _, energy_curve = run_bp_on_image(
-            image, ft, sp, clf, scaler, track_energy=True, reparametrization=True
+            ft, sp, clf, scaler, track_energy=True, reparametrization=True
         )
 
         ax.plot(energy_curve, marker="o", markersize=2,
