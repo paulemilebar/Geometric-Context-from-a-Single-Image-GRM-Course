@@ -8,13 +8,15 @@ import sys
 sys.path.insert(0, "src")
 
 from superpixels import load_sp, load_ft
+from dataset import HoiemDataset
 
 
 SP_DIR  = Path("data/superpixels")
 OUT_DIR = Path("outputs/graph_visu")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# PAIRWISE WEIGHTS
+
+# FUNCTIONS ALREADY CODED IN BP
 def compute_pairwise_weights(adjacency, features, beta=0.1):
     weights = {}
 
@@ -24,26 +26,10 @@ def compute_pairwise_weights(adjacency, features, beta=0.1):
             w = np.exp(-beta * diff**2)
 
             weights[(i, j)] = w
-            weights[(j, i)] = w 
+            weights[(j, i)] = w
 
     return weights
 
-# =========================
-# GRAPH VISUALIZATION
-# =========================
-def compute_centers(segments):
-    n_sp = segments.max() + 1
-    centers = np.zeros((n_sp, 2))
-
-    for sp_id in range(n_sp):
-        ys, xs = np.where(segments == sp_id)
-        if len(xs) == 0:
-            continue
-        centers[sp_id] = [xs.mean(), ys.mean()]
-
-    return centers
-
-# ADJACENCY
 def to_adj_dict(adjacency):
     if isinstance(adjacency, dict):
         return {int(i): set(map(int, neigh)) for i, neigh in adjacency.items()}
@@ -58,6 +44,19 @@ def to_adj_dict(adjacency):
 
     raise TypeError("Unsupported adjacency type")
 
+
+# GRAPH VISUALIZATION
+def compute_centers(segments):
+    n_sp = segments.max() + 1
+    centers = np.zeros((n_sp, 2))
+
+    for sp_id in range(n_sp):
+        ys, xs = np.where(segments == sp_id)
+        if len(xs) == 0:
+            continue
+        centers[sp_id] = [xs.mean(), ys.mean()]
+
+    return centers
 
 
 def plot_superpixels(image, segments, save_path):
@@ -108,8 +107,6 @@ def plot_weighted_graph(image, segments, adjacency, weights, save_path):
         for j in range(n_sp):
             if adjacency[i, j]:
                 w = weights.get((i, j), 0)
-
-                # épaisseur dépend du poids
                 lw = 0.5 + 3 * w
 
                 x1, y1 = centers[i]
@@ -128,21 +125,29 @@ def plot_weighted_graph(image, segments, adjacency, weights, save_path):
     plt.close()
 
 
-# =========================
 # MAIN LOOP
-# =========================
 def main():
     files = sorted(SP_DIR.glob("*.npy"))
 
     print(f"Found {len(files)} superpixel files")
 
-    for i, fpath in enumerate(files[:10]):  # limite à 10 images
+    # DATASET
+    ds = HoiemDataset(root_dir="dataset")
+
+    # mapping nom -> index dataset
+    name_to_idx = {}
+    for idx in range(len(ds)):
+        _, _, meta = ds[idx]
+        stem = Path(meta["imname"]).stem
+        name_to_idx[stem] = idx
+
+    for i, fpath in enumerate(files[:10]):  # limit of 10 images
         name = fpath.stem
         print(f"[{i}] Processing {name}")
 
         sp = load_sp(name)
         if sp is None:
-            print("  -> skip (no sp)")
+            print("  -> skip (no superpixels)")
             continue
 
         ft = load_ft(name)
@@ -150,13 +155,16 @@ def main():
             print("  -> skip (no features)")
             continue
 
+        if name not in name_to_idx:
+            print("  -> skip (not in dataset)")
+            continue
+
+        # retrieve images from dataset
+        idx = name_to_idx[name]
+        image, _, _ = ds[idx]
+
         segments = sp["segments"]
         adjacency = sp["adj"]
-        image = ft.get("image", None)
-
-        if image is None:
-            print("  -> skip (no image in features)")
-            continue
 
         # weights
         adjacency_dict = to_adj_dict(adjacency)
@@ -172,6 +180,7 @@ def main():
         plot_weighted_graph(image, segments, adjacency, weights,
                             OUT_DIR / f"{name}_weighted.png")
 
+    print(f"\nDone -> see {OUT_DIR}")
 
 
 if __name__ == "__main__":
