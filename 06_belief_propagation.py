@@ -22,13 +22,15 @@ N_ITERS = 20
 
 
 # ENERGY
-def compute_energy(labels, unary, adjacency, lam):
+def compute_energy(labels, unary, adjacency, lam, weights):
     E = np.sum(unary[np.arange(len(labels)), labels])
 
     for i in range(len(labels)):
         for j in adjacency[i]:
             if i < j and labels[i] != labels[j]:
-                E += lam
+                w = weights.get((i, j), 1.0)
+                E += lam * w 
+
     return E
 
 
@@ -56,7 +58,9 @@ def compute_pairwise_weights(adjacency, features, beta=0.1):
         for j in adjacency[i]:
             diff = np.linalg.norm(features[i] - features[j])
             w = np.exp(-beta * diff**2)
+
             weights[(i, j)] = w
+            weights[(j, i)] = w 
 
     return weights
 
@@ -84,6 +88,7 @@ def belief_propagation(unary, adjacency, weights, n_iters=20, lam=0.5,
         for i in range(N):
             for j in adj[i]:
 
+                # messages entrants
                 msg = unary[i].copy()
                 for k in adj[i]:
                     if k != j:
@@ -92,10 +97,17 @@ def belief_propagation(unary, adjacency, weights, n_iters=20, lam=0.5,
                 w = weights.get((i, j), 1.0)
 
                 min_msg = msg.min()
-                new_msg = np.minimum(msg, min_msg + lam * w)
+
+                new_msg = np.zeros(L)
+                for l in range(L):
+                    new_msg[l] = min(
+                        msg[l],
+                        min_msg + lam * w
+                    )
 
                 new_msg -= new_msg.min()
 
+                # damping
                 new_msg = damping * new_msg + (1 - damping) * messages[(i, j)]
 
                 new_messages[(i, j)] = new_msg
@@ -112,7 +124,7 @@ def belief_propagation(unary, adjacency, weights, n_iters=20, lam=0.5,
             labels_tmp = np.argmin(beliefs_tmp, axis=1)
 
             adj_list = {i: adj[i] for i in range(N)}
-            energy = compute_energy(labels_tmp, unary, adj_list, lam)
+            energy = compute_energy(labels_tmp, unary, adj_list, lam, weights)
             energy_curve.append(energy)
 
     beliefs = np.zeros((N, L))
@@ -156,7 +168,6 @@ def run_bp_on_image(ft, sp, clf, scaler, track_energy=False):
     X = scaler.transform(feats)
     probas = clf.predict_proba(X)
     unary = -np.log(probas + 1e-6)
-
 
     adj_matrix = build_adjacency(segments)
     adjacency = to_adj_dict(adj_matrix)
