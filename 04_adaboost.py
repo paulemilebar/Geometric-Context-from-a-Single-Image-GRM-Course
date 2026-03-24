@@ -22,7 +22,7 @@ OUT_DIR     = Path("outputs"); OUT_DIR.mkdir(exist_ok=True)
 
 # adaboost params following hoiem 2005 (logistic regression adaboost, 8-node trees)
 N_ESTIMATORS = 200
-MAX_DEPTH    = 3   # ~8 leaf nodes
+MAX_DEPTH    = 3   # ~8 leaf nodes (paper: 8-node decision trees)
 
 
 def load_split_data(ds, indices):
@@ -223,14 +223,20 @@ def main():
     print(f"  sky      : {per_cls[3]:.4f}")
     print(f"\n  hoiem 2005 baseline  : 0.8600")
 
-    # 3) 5-fold cross-validation on cv_images
+    # 3a) 5-fold cross-validation on cv_images only (250 images) — current setup
     print("\n5-fold cross-validation on cv_images (250 images)...")
-    cv_local = list(range(len(test_indices)))   # local indices into test set
-    # rebuild as global indices for cv
     cv_global = test_indices
     fold_accs = cross_validate(ds, cv_global, n_folds=5)
     print(f"\ncv results: {[f'{a:.4f}' for a in fold_accs]}")
     print(f"mean={np.mean(fold_accs):.4f}  std={np.std(fold_accs):.4f}")
+
+    # 3b) 5-fold CV on ALL 300 images — matches hoiem 2005 protocol (240 train / 60 val)
+    print("\n5-fold cross-validation on ALL 300 images (hoiem protocol)...")
+    all_indices = list(range(len(ds)))
+    fold_accs_all = cross_validate(ds, all_indices, n_folds=5)
+    print(f"\ncv300 results: {[f'{a:.4f}' for a in fold_accs_all]}")
+    print(f"mean={np.mean(fold_accs_all):.4f}  std={np.std(fold_accs_all):.4f}")
+    print(f"  hoiem 2005 baseline  : 0.8600")
 
     # 4) feature importance
     importances = clf.feature_importances_
