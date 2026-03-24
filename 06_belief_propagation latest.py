@@ -8,6 +8,9 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import confusion_matrix
 import pickle
+import json
+import csv
+from datetime import datetime
 
 sys.path.insert(0, "src")
 from dataset import HoiemDataset, LABEL_NAMES, LABEL_COLORS, LABEL_IDS
@@ -17,7 +20,7 @@ DATASET_DIR = Path("dataset")
 MODEL_DIR   = Path("data/models"); MODEL_DIR.mkdir(parents=True, exist_ok=True)
 OUT_DIR     = Path("outputs"); OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-LAMBDA_PAIRWISE = 0.1
+LAMBDA_PAIRWISE = 0.2
 N_ITERS = 15
 
 # ENERGY
@@ -46,6 +49,48 @@ def to_adj_dict(adjacency):
         return adj
 
     raise TypeError("Unsupported adjacency type")
+
+def compute_pairwise_weights_color_texture_position(adjacency, features,
+                             beta_color=0.05,
+                             beta_texture=0.05,
+                             beta_pos=0.01):
+
+    weights = {}
+
+    color_idx   = slice(0, 16)
+    texture_idx = slice(16, 31)
+    geometry_idx = slice(31, 43)
+
+    # --- extraire position (x,y moyens) ---
+    # L1 = mean x,y → premières 2 dims du bloc location
+    pos_idx = slice(31, 33)
+
+    for i in adjacency:
+        for j in adjacency[i]:
+
+            # ===== COLOR =====
+            diff_color = features[i][color_idx] - features[j][color_idx]
+            d_color = np.dot(diff_color, diff_color)
+
+            # ===== TEXTURE =====
+            diff_texture = features[i][texture_idx] - features[j][texture_idx]
+            d_texture = np.dot(diff_texture, diff_texture)
+
+            # ===== POSITION =====
+            diff_pos = features[i][pos_idx] - features[j][pos_idx]
+            d_pos = np.dot(diff_pos, diff_pos)
+
+            # ===== COMBINAISON =====
+            w = np.exp(
+                - beta_color * d_color
+                - beta_texture * d_texture
+                - beta_pos * d_pos
+            )
+
+            weights[(i, j)] = w
+            weights[(j, i)] = w
+
+    return weights
 
 # PAIRWISE WEIGHTS (FEATURES-BASED)
 def compute_pairwise_weights(adjacency, features, beta=0.05):
@@ -169,81 +214,6 @@ def belief_propagation_reparametrization(unary_init, adjacency, weights,
 
     return labels
 
-def belief_propagation_messages(unary, adjacency, weights, n_iters=20, lam=0.5,
-                      damping=0.5, track_energy=False):
-
-    N, L = unary.shape
-
-    adj = to_adj_dict(adjacency)
-    for i in list(adj.keys()):
-        for j in adj[i]:
-            adj.setdefault(j, set()).add(i)
-    adj = {i: list(v) for i, v in adj.items()}
-
-    messages = {(i, j): np.zeros(L) for i in adj for j in adj[i]}
-
-    energy_curve = []
-
-    for _ in range(n_iters):
-
-        new_messages = {}
-
-        for i in range(N):
-            for j in adj[i]:
-
-                # messages
-                msg = unary[i].copy()
-                for k in adj[i]:
-                    if k != j:
-                        msg += messages[(k, i)]
-
-                w = weights.get((i, j), 1.0)
-
-                # BP Potts
-                min_msg = msg.min()
-
-                new_msg = np.zeros(L)
-                for l in range(L):
-                    new_msg[l] = min(
-                        msg[l],
-                        min_msg + lam * w
-                    )
-
-                # normalisation
-                new_msg -= new_msg.min()
-
-                # damping
-                new_msg = damping * new_msg + (1 - damping) * messages[(i, j)]
-
-                new_messages[(i, j)] = new_msg
-
-        messages = new_messages
-
-        if track_energy:
-            beliefs_tmp = np.zeros((N, L))
-            for i in range(N):
-                beliefs_tmp[i] = unary[i]
-                for k in adj[i]:
-                    beliefs_tmp[i] += messages[(k, i)]
-
-            labels_tmp = np.argmin(beliefs_tmp, axis=1)
-
-            adj_list = {i: adj[i] for i in range(N)}
-            energy = compute_energy(labels_tmp, unary, adj_list, lam, weights)
-            energy_curve.append(energy)
-
-    beliefs = np.zeros((N, L))
-    for i in range(N):
-        beliefs[i] = unary[i]
-        for k in adj[i]:
-            beliefs[i] += messages[(k, i)]
-
-    labels = np.argmin(beliefs, axis=1)
-
-    if track_energy:
-        return labels, energy_curve
-    return labels
-
 
 # DATA LOADING
 def load_split_data(ds, indices):
@@ -266,7 +236,7 @@ def load_split_data(ds, indices):
 
 
 # INFERENCE PER IMAGE
-def run_bp_on_image(ft, sp, clf, scaler, track_energy=False, reparametrization=True):
+def run_bp_on_image(ft, sp, clf, scaler, track_energy=False):
     feats = ft["features"]
     segments = sp["segments"]
     
@@ -277,28 +247,18 @@ def run_bp_on_image(ft, sp, clf, scaler, track_energy=False, reparametrization=T
     adj_matrix = build_adjacency(segments)
     adjacency = to_adj_dict(adj_matrix)
 
+    # 2 APPROACHES : either we separate the the feature comparaision based on colors, location and texture. Or we just compute the comparaision based on ALL features.
     weights = compute_pairwise_weights(adjacency, X, beta=0.05)
+    #weights = compute_pairwise_weights_color_texture_position(adjacency, X, beta_color=0.05, beta_texture=0.05, beta_pos=0.05)
+
     if track_energy:
-        if reparametrization:
-            preds, energy_curve = belief_propagation_reparametrization(
-                unary, adjacency, weights,
-                N_ITERS, LAMBDA_PAIRWISE,
-                track_energy=True
-            )
-        else:
-            preds, energy_curve = belief_propagation_messages(
+        preds, energy_curve = belief_propagation_reparametrization(
                 unary, adjacency, weights,
                 N_ITERS, LAMBDA_PAIRWISE,
                 track_energy=True
             )
     else:
-        if reparametrization:
-            preds = belief_propagation_reparametrization(
-                unary, adjacency, weights,
-                N_ITERS, LAMBDA_PAIRWISE
-            )
-        else:
-            preds = belief_propagation_messages(
+        preds = belief_propagation_reparametrization(
                 unary, adjacency, weights,
                 N_ITERS, LAMBDA_PAIRWISE
             )
@@ -317,7 +277,7 @@ def run_bp_on_image(ft, sp, clf, scaler, track_energy=False, reparametrization=T
 
 
 # METRICS
-def pixel_accuracy_bp(ds, indices, clf, scaler, reparametrization=True):
+def pixel_accuracy_bp(ds, indices, clf, scaler):
     correct = total = 0
 
     for idx in indices:
@@ -327,7 +287,7 @@ def pixel_accuracy_bp(ds, indices, clf, scaler, reparametrization=True):
         if ft is None or sp is None:
             continue
 
-        pred_map = run_bp_on_image(ft, sp, clf, scaler, reparametrization=reparametrization)
+        pred_map = run_bp_on_image(ft, sp, clf, scaler)
 
         valid = label_map > 0
         correct += (pred_map[valid] == label_map[valid]).sum()
@@ -337,7 +297,7 @@ def pixel_accuracy_bp(ds, indices, clf, scaler, reparametrization=True):
 
 
 # PLOTS
-def plot_confusion_bp(ds, indices, clf, scaler, save_path, reparametrization=True):
+def plot_confusion_bp(ds, indices, clf, scaler, save_path):
     all_preds, all_true = [], []
 
     for idx in indices[:50]:
@@ -347,7 +307,7 @@ def plot_confusion_bp(ds, indices, clf, scaler, save_path, reparametrization=Tru
         if ft is None or sp is None:
             continue
 
-        pred_map = run_bp_on_image(ft, sp, clf, scaler, reparametrization=reparametrization)
+        pred_map = run_bp_on_image(ft, sp, clf, scaler)
 
         valid = label_map > 0
         all_true.extend(label_map[valid].tolist())
@@ -379,7 +339,7 @@ def plot_confusion_bp(ds, indices, clf, scaler, save_path, reparametrization=Tru
     plt.close()
 
 
-def plot_predictions_bp(ds, indices, clf, scaler, save_path, n=6, reparametrization=True):
+def plot_predictions_bp(ds, indices, clf, scaler, save_path, n=6):
     fig, axes = plt.subplots(3, n, figsize=(4*n, 12))
     fig.suptitle("BP predictions", fontsize=13)
 
@@ -390,7 +350,7 @@ def plot_predictions_bp(ds, indices, clf, scaler, save_path, n=6, reparametrizat
         if ft is None or sp is None:
             continue
 
-        pred_map = run_bp_on_image(ft, sp, clf, scaler, reparametrization=reparametrization)
+        pred_map = run_bp_on_image(ft, sp, clf, scaler)
 
         valid = label_map > 0
         acc = (pred_map[valid] == label_map[valid]).mean()
@@ -419,7 +379,7 @@ def plot_predictions_bp(ds, indices, clf, scaler, save_path, n=6, reparametrizat
     plt.close()
 
 
-def plot_energy_curves(ds, indices, clf, scaler, save_path, n=5, reparametrization=True):
+def plot_energy_curves(ds, indices, clf, scaler, save_path, n=5):
     fig, ax = plt.subplots(figsize=(6, 4))
 
     for idx in indices[:n]:
@@ -430,7 +390,7 @@ def plot_energy_curves(ds, indices, clf, scaler, save_path, n=5, reparametrizati
             continue
 
         _, energy_curve = run_bp_on_image(
-            ft, sp, clf, scaler, track_energy=True, reparametrization=True
+            ft, sp, clf, scaler, track_energy=True
         )
 
         ax.plot(energy_curve, marker="o", markersize=2,
@@ -447,7 +407,7 @@ def plot_energy_curves(ds, indices, clf, scaler, save_path, n=5, reparametrizati
 
 
 # MAIN
-def main(reparametrization=True):
+def main():
     ds = HoiemDataset(root_dir=DATASET_DIR)
     train_ds, test_ds = ds.get_split()
 
@@ -492,5 +452,183 @@ def main(reparametrization=True):
         pickle.dump({"clf": clf, "scaler": scaler}, f)
 
 
+def save_results(results, out_dir):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    json_path = out_dir / f"grid_search_{timestamp}.json"
+    csv_path  = out_dir / f"grid_search_{timestamp}.csv"
+
+    # JSON
+    with open(json_path, "w") as f:
+        json.dump(results, f, indent=4)
+
+    # CSV
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["lambda", "beta", "accuracy"])
+        writer.writeheader()
+        for r in results:
+            writer.writerow(r)
+
+    print(f"\nResults saved to:\n{json_path}\n{csv_path}")
+
+
+def hyperparameter_grid_search(ds, test_indices, clf, scaler,
+                               lambda_values, beta_values,
+                               max_images=30,
+                               use_reparam=True):
+
+    results = []
+
+    for lam in lambda_values:
+        for beta in beta_values:
+
+            print(f"\nTesting lambda={lam:.3f}, beta={beta:.3f}")
+
+            correct = 0
+            total = 0
+
+            for idx in test_indices[:max_images]:
+
+                _, label_map, m = ds[idx]
+                ft = load_ft(m["imname"])
+                sp = load_sp(m["imname"])
+
+                if ft is None or sp is None:
+                    continue
+
+                feats = ft["features"]
+                segments = sp["segments"]
+
+                X = scaler.transform(feats)
+                probas = clf.predict_proba(X)
+                unary = -np.log(probas + 1e-6)
+
+                adj_matrix = build_adjacency(segments)
+                adjacency = to_adj_dict(adj_matrix)
+
+                weights = compute_pairwise_weights(adjacency, X, beta=beta)
+
+                preds = belief_propagation_reparametrization(
+                        unary, adjacency, weights,
+                        n_iters=N_ITERS, lam=lam
+                    )
+                
+
+                pred_map = np.zeros_like(segments)
+                sp_ids = np.unique(segments)
+
+                for i, sp_id in enumerate(np.sort(sp_ids)):
+                    pred_map[segments == sp_id] = preds[i] + 1
+
+                valid = label_map > 0
+                correct += (pred_map[valid] == label_map[valid]).sum()
+                total += valid.sum()
+
+            acc = correct / total if total > 0 else 0
+            print(f"Accuracy: {acc:.4f}")
+
+            results.append({
+                "lambda": float(lam),
+                "beta": float(beta),
+                "accuracy": float(acc)
+            })
+
+    return results
+
+
+def plot_results_heatmap(results, lambda_values, beta_values, save_path):
+
+    grid = np.zeros((len(lambda_values), len(beta_values)))
+
+    for r in results:
+        i = lambda_values.index(r["lambda"])
+        j = beta_values.index(r["beta"])
+        grid[i, j] = r["accuracy"]
+
+    plt.figure(figsize=(6,5))
+    plt.imshow(grid, origin="lower")
+
+    plt.xticks(range(len(beta_values)), [f"{b:.2f}" for b in beta_values])
+    plt.yticks(range(len(lambda_values)), [f"{l:.2f}" for l in lambda_values])
+
+    plt.xlabel("beta")
+    plt.ylabel("lambda")
+    plt.title("Accuracy heatmap")
+
+    for i in range(len(lambda_values)):
+        for j in range(len(beta_values)):
+            plt.text(j, i, f"{grid[i,j]:.2f}",
+                     ha="center", va="center",
+                     color="white" if grid[i,j] > 0.5 else "black")
+
+    plt.colorbar()
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
+    print(f"Heatmap saved to {save_path}")
+
+
+def grid_search():
+
+    print("=== DATA LOADING ===")
+    ds = HoiemDataset(root_dir=DATASET_DIR)
+    train_ds, test_ds = ds.get_split()
+
+    train_indices = train_ds._i
+    test_indices = test_ds._i
+
+    print("Loading features...")
+    X_tr, y_tr = load_split_data(ds, train_indices)
+
+    scaler = StandardScaler().fit(X_tr)
+    X_tr = scaler.transform(X_tr)
+
+    print("Training AdaBoost...")
+    clf = AdaBoostClassifier(
+        estimator=DecisionTreeClassifier(max_depth=3),
+        n_estimators=200,
+        random_state=42,
+    )
+    clf.fit(X_tr, y_tr)
+
+    # GRID SEARCH PARAMETERS
+
+    lambda_values = [0.05, 0.1, 0.2, 0.4, 0.8]
+    beta_values   = [0.01, 0.02, 0.05, 0.1]
+
+    print("\n=== START GRID SEARCH ===")
+
+    results = hyperparameter_grid_search(
+        ds, test_indices, clf, scaler,
+        lambda_values, beta_values,
+        max_images=100, 
+        use_reparam=True 
+    )
+
+    # SAVE RESULTS
+
+    save_results(results, OUT_DIR)
+
+    # HEATMAP
+
+    plot_results_heatmap(
+        results,
+        lambda_values,
+        beta_values,
+        OUT_DIR / "grid_search_heatmap.png"
+    )
+
+    # BEST PARAMS
+
+    best = max(results, key=lambda x: x["accuracy"])
+
+    print("\n=== BEST PARAMETERS ===")
+    print(f"lambda = {best['lambda']}")
+    print(f"beta   = {best['beta']}")
+    print(f"acc    = {best['accuracy']:.4f}")
+
+## NOTE : IF YOU WANT TO DO A GRID SEARCH TO STUDY THE INFLUENCE ON HYPERPARAMETERS LAMBDA AND BETA UNCOMMENT grid_search() AND COMMENT main(). 
 if __name__ == "__main__":
     main()
+    #grid_search()
