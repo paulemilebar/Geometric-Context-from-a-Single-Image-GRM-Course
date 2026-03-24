@@ -40,7 +40,8 @@ def sp_gt_labels(segments, label_map):
         vals = label_map[mask]
         vals = vals[vals > 0]
         if len(vals):
-            counts = np.bincount(vals)
+            counts = np.bincount(vals, minlength=4)
+            counts[0] = 0  # ignore unlabeled pixels
             out[sp_id] = counts.argmax()
     return out
 

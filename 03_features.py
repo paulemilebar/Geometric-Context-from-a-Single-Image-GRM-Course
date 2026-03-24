@@ -34,7 +34,7 @@ FEATURE_NAMES = (
 )
 assert len(FEATURE_NAMES) == 78
 
-GROUPS = {"color": (0,16), "texture": (16,31), "location": (31,43), "geometry": (43,78)}
+GROUPS = {"color": (0,16), "location": (16,28), "texture": (28,43), "geometry": (43,78)}
 
 
 def _gauss2d(sigma, size):
@@ -107,11 +107,13 @@ class FeatureExtractor:
                 compact    = float(np.clip(mask.sum() / (hull.volume + 1e-8), 0, 1))
             except Exception:
                 pass
+        n_sp_norm = float(len(ys)) / (self.H * self.W)  # l4: normalized superpixel area
+        x_range   = float(xs.max() - xs.min()) / self.W if len(xs) > 1 else 0.0  # l7: x-spread proxy
         return np.array([xn.mean(), yn.mean(),
                          np.percentile(xn,10), np.percentile(xn,90),
                          np.percentile(yn,10), np.percentile(yn,90),
                          np.percentile(yn,10)-hn, np.percentile(yn,90)-hn,
-                         1.0, hull_sides, compact, 1.0], dtype=np.float32)
+                         n_sp_norm, hull_sides, compact, x_range], dtype=np.float32)
 
     def _get_lines(self):
         if self._lines is not None:
