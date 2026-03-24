@@ -8,9 +8,6 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import confusion_matrix
 import pickle
-import json
-import csv
-from datetime import datetime
 
 sys.path.insert(0, "src")
 from dataset import HoiemDataset, LABEL_NAMES, LABEL_COLORS, LABEL_IDS
@@ -20,10 +17,17 @@ DATASET_DIR = Path("dataset")
 MODEL_DIR   = Path("data/models"); MODEL_DIR.mkdir(parents=True, exist_ok=True)
 OUT_DIR     = Path("outputs"); OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-LAMBDA_PAIRWISE = 0.2
+# HYPERPARAMETERS SET UP
+LAMBDA_PAIRWISE = 0.1
+BETA = 0.05
+BETA_COLOR = 0.2
+BETA_TEXTURE = 0.1
+BETA_POS = 0.08
 N_ITERS = 15
+MAX_IMAGES = 90 # fro grid search
+BETA = 0.05
 
-# ENERGY
+# ENERGY COMPUTATION
 def compute_energy(labels, unary, adjacency, lam, weights):
     E = np.sum(unary[np.arange(len(labels)), labels])
     for i in range(len(labels)):
@@ -33,7 +37,6 @@ def compute_energy(labels, unary, adjacency, lam, weights):
                 E += lam * w
 
     return E
-
 
 # ADJACENCY
 def to_adj_dict(adjacency):
@@ -50,50 +53,8 @@ def to_adj_dict(adjacency):
 
     raise TypeError("Unsupported adjacency type")
 
-def compute_pairwise_weights_color_texture_position(adjacency, features,
-                             beta_color=0.05,
-                             beta_texture=0.05,
-                             beta_pos=0.01):
-
-    weights = {}
-
-    color_idx   = slice(0, 16)
-    texture_idx = slice(16, 31)
-    geometry_idx = slice(31, 43)
-
-    # --- extraire position (x,y moyens) ---
-    # L1 = mean x,y → premières 2 dims du bloc location
-    pos_idx = slice(31, 33)
-
-    for i in adjacency:
-        for j in adjacency[i]:
-
-            # ===== COLOR =====
-            diff_color = features[i][color_idx] - features[j][color_idx]
-            d_color = np.dot(diff_color, diff_color)
-
-            # ===== TEXTURE =====
-            diff_texture = features[i][texture_idx] - features[j][texture_idx]
-            d_texture = np.dot(diff_texture, diff_texture)
-
-            # ===== POSITION =====
-            diff_pos = features[i][pos_idx] - features[j][pos_idx]
-            d_pos = np.dot(diff_pos, diff_pos)
-
-            # ===== COMBINAISON =====
-            w = np.exp(
-                - beta_color * d_color
-                - beta_texture * d_texture
-                - beta_pos * d_pos
-            )
-
-            weights[(i, j)] = w
-            weights[(j, i)] = w
-
-    return weights
-
-# PAIRWISE WEIGHTS (FEATURES-BASED)
-def compute_pairwise_weights(adjacency, features, beta=0.05):
+# PAIRWISE WEIGHTS (ALL FEATURES-BASED)
+def compute_pairwise_weights(adjacency, features, beta=BETA):
     weights = {}
 
     for i in adjacency:
@@ -101,6 +62,49 @@ def compute_pairwise_weights(adjacency, features, beta=0.05):
             diff = features[i] - features[j]
             d = np.dot(diff, diff)
             w = np.exp(-beta * d)
+
+            weights[(i, j)] = w
+            weights[(j, i)] = w
+
+    return weights
+
+# PAIRWISE WEIGHTS (DIFFERENT WEIGHTS FOR DIFFERENT TYPE OF FEATURES)
+def compute_pairwise_weights_color_texture_position(adjacency, features,
+                             beta_color=BETA_COLOR,
+                             beta_texture=BETA_TEXTURE,
+                             beta_pos=BETA_POS):
+
+    weights = {}
+
+    color_idx   = slice(0, 16)
+    texture_idx = slice(16, 31)
+    geometry_idx = slice(31, 43)
+
+    # extract position (x,y mean) 
+    # L1 = mean x,y
+    pos_idx = slice(31, 33)
+
+    for i in adjacency:
+        for j in adjacency[i]:
+
+            # COLOR
+            diff_color = features[i][color_idx] - features[j][color_idx]
+            d_color = np.dot(diff_color, diff_color)
+
+            # TEXTURE
+            diff_texture = features[i][texture_idx] - features[j][texture_idx]
+            d_texture = np.dot(diff_texture, diff_texture)
+
+            # POSITION
+            diff_pos = features[i][pos_idx] - features[j][pos_idx]
+            d_pos = np.dot(diff_pos, diff_pos)
+
+            # COMBINAISON
+            w = np.exp(
+                - beta_color * d_color
+                - beta_texture * d_texture
+                - beta_pos * d_pos
+            )
 
             weights[(i, j)] = w
             weights[(j, i)] = w
@@ -214,7 +218,6 @@ def belief_propagation_reparametrization(unary_init, adjacency, weights,
 
     return labels
 
-
 # DATA LOADING
 def load_split_data(ds, indices):
     X, y = [], []
@@ -247,10 +250,12 @@ def run_bp_on_image(ft, sp, clf, scaler, track_energy=False):
     adj_matrix = build_adjacency(segments)
     adjacency = to_adj_dict(adj_matrix)
 
-    # 2 APPROACHES : either we separate the the feature comparaision based on colors, location and texture. Or we just compute the comparaision based on ALL features.
-    weights = compute_pairwise_weights(adjacency, X, beta=0.05)
-    #weights = compute_pairwise_weights_color_texture_position(adjacency, X, beta_color=0.05, beta_texture=0.05, beta_pos=0.05)
+    # 2 DIFFERENT APPROACHES : 
+    # either we separate the the feature comparaision based on colors, location and texture. compute_pairwise_weights_color_texture_position()
+    # Or we just compute the comparaision based on ALL features. compute_pairwise_weights()
 
+    weights = compute_pairwise_weights_color_texture_position(adjacency, X, beta_color=BETA_COLOR, beta_texture=BETA_TEXTURE, beta_pos=BETA_POS)
+    #weights = compute_pairwise_weights(adjacency, X, beta=BETA)
     if track_energy:
         preds, energy_curve = belief_propagation_reparametrization(
                 unary, adjacency, weights,
@@ -452,6 +457,12 @@ def main():
         pickle.dump({"clf": clf, "scaler": scaler}, f)
 
 
+
+import json
+import csv
+from datetime import datetime
+
+
 def save_results(results, out_dir):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -474,8 +485,8 @@ def save_results(results, out_dir):
 
 def hyperparameter_grid_search(ds, test_indices, clf, scaler,
                                lambda_values, beta_values,
-                               max_images=30,
-                               use_reparam=True):
+                               max_images=MAX_IMAGES
+                               ):
 
     results = []
 
@@ -568,6 +579,82 @@ def plot_results_heatmap(results, lambda_values, beta_values, save_path):
 
     print(f"Heatmap saved to {save_path}")
 
+def hyperparameter_grid_search_ctp(
+    ds, test_indices, clf, scaler,
+    lambda_values,
+    beta_color_values,
+    beta_texture_values,
+    beta_pos_values,
+    max_images=MAX_IMAGES,
+):
+
+    results = []
+
+    for lam in lambda_values:
+        for bc in beta_color_values:
+            for bt in beta_texture_values:
+                for bp in beta_pos_values:
+
+                    print(f"\nλ={lam:.3f}, βc={bc:.3f}, βt={bt:.3f}, βp={bp:.3f}")
+
+                    correct = 0
+                    total = 0
+
+                    for idx in test_indices[:max_images]:
+
+                        _, label_map, m = ds[idx]
+                        ft = load_ft(m["imname"])
+                        sp = load_sp(m["imname"])
+
+                        if ft is None or sp is None:
+                            continue
+
+                        feats = ft["features"]
+                        segments = sp["segments"]
+
+                        X = scaler.transform(feats)
+                        probas = clf.predict_proba(X)
+                        unary = -np.log(probas + 1e-6)
+
+                        adj_matrix = build_adjacency(segments)
+                        adjacency = to_adj_dict(adj_matrix)
+
+                        weights = compute_pairwise_weights_color_texture_position(
+                            adjacency, X,
+                            beta_color=bc,
+                            beta_texture=bt,
+                            beta_pos=bp
+                        )
+
+                        preds = belief_propagation_reparametrization(
+                                unary, adjacency, weights,
+                                n_iters=N_ITERS, lam=lam
+                            )
+                        
+
+                        pred_map = np.zeros_like(segments)
+                        sp_ids = np.unique(segments)
+
+                        for i, sp_id in enumerate(np.sort(sp_ids)):
+                            pred_map[segments == sp_id] = preds[i] + 1
+
+                        valid = label_map > 0
+                        correct += (pred_map[valid] == label_map[valid]).sum()
+                        total += valid.sum()
+
+                    acc = correct / total if total > 0 else 0
+                    print(f"Accuracy: {acc:.4f}")
+
+                    results.append({
+                        "lambda": float(lam),
+                        "beta_color": float(bc),
+                        "beta_texture": float(bt),
+                        "beta_pos": float(bp),
+                        "accuracy": float(acc)
+                    })
+
+    return results
+
 
 def grid_search():
 
@@ -592,32 +679,56 @@ def grid_search():
     )
     clf.fit(X_tr, y_tr)
 
-    # GRID SEARCH PARAMETERS
+    # =========================
+    # GRID SEARCH PARAMETERS WITOUT SEPARATED FEATURES
+    # =========================
 
-    lambda_values = [0.05, 0.1, 0.2, 0.4, 0.8]
-    beta_values   = [0.01, 0.02, 0.05, 0.1]
+    #lambda_values = [0.05, 0.1, 0.2, 0.4, 0.8]
+    #beta_values   = [0.01, 0.02, 0.05, 0.1]
 
-    print("\n=== START GRID SEARCH ===")
+    #print("\n=== START GRID SEARCH ===")
 
-    results = hyperparameter_grid_search(
-        ds, test_indices, clf, scaler,
-        lambda_values, beta_values,
-        max_images=100, 
-        use_reparam=True 
+    #results = hyperparameter_grid_search(
+        #ds, test_indices, clf, scaler,
+        #lambda_values, beta_values,
+        #max_images=100, 
+    #)
+
+    # =========================
+    # GRID SEARCH PARAMETERS WITH SEPARATED FEATURES COLORS POSITION AND TEXTURE
+    # =========================
+
+    lambda_values = [0.1, 0.2]
+
+    beta_color_values   = [0.03, 0.05, 0.1, 0.2]
+    beta_texture_values = [0.03, 0.05, 0.1]
+    beta_pos_values     = [0.01, 0.02, 0.05, 0.08]
+
+    results = hyperparameter_grid_search_ctp(
+    ds, test_indices, clf, scaler,
+    lambda_values,
+    beta_color_values,
+    beta_texture_values,
+    beta_pos_values,
+    max_images=50
     )
 
+    # =========================
     # SAVE RESULTS
+    # =========================
 
     save_results(results, OUT_DIR)
 
+    # =========================
     # HEATMAP
+    # =========================
 
-    plot_results_heatmap(
-        results,
-        lambda_values,
-        beta_values,
-        OUT_DIR / "grid_search_heatmap.png"
-    )
+    #plot_results_heatmap(
+    #    results,
+    #    lambda_values,
+    #    beta_values,
+    #    OUT_DIR / "grid_search_heatmap.png"
+   # )
 
     # BEST PARAMS
 
