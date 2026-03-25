@@ -113,14 +113,15 @@ Test set: **250 images** (`cv_images`)
 | MultiH (9 hypotheses, train=50, test=250) | 0.8256 | 0.792 | 0.802 | 0.936 |
 | MultiH (5-fold CV, train=200) | 0.8265 | — | — | — |
 | **GNN without Attention (train=50)** | 0.7983 | 0.666 | 0.815 | 0.812 |
-| **GNN improved (ours, train=50)** | **0.8294** | **0.680** | **0.861** | **0.851** |
+| **GNN improved (AdaBoost prior, train=50)** | **0.8294** | **0.680** | **0.861** | **0.851** |
+| **GNN improved (MultiH prior, train=50)** | **0.8342** | **0.699** | **0.855** | **0.869** |
 | Hoiem et al. 2005 | 0.8600 | — | — | — |
 
 ### Analysis
 
-The improved GNN reaches **0.8294** pixel accuracy. Not only is this **+3.9 points** above the baseline SPixel AdaBoost, but it actually slightly outperforms the **MultiH fusion model (0.8256)** on the same training split! 
+The improved GNN with a simple AdaBoost prior reaches **0.8294** pixel accuracy, which slightly outperforms the pure **MultiH fusion model (0.8256)** on the same training split! This shows that we can achieve extremely robust performance using a single superpixel segmentation map modeled as a Graph Neural Network, compared to Hoiem's complex multiple-hypothesis fusion approach.
 
-This is a very powerful result: it shows that we can achieve the same (even slightly better) performance using a single superpixel segmentation map modeled as a Graph Neural Network, compared to Hoiem's complex multiple-hypothesis fusion approach. It is only **3.1 points** below the paper's reported 0.86.
+Furthermore, when taking the full **MultiH fusion probabilities as a prior** for the GNN, the performance jumps even higher to **0.8342** (almost +0.5 points). The GNN is successfully able to leverage the context to refine the already excellent MultiH predictions into an even more spatially coherent map. With just 50 images of training data, this end-to-end model is now only **2.6 points** below the paper's reported 0.86!
 
 The remaining gap to the paper comes from:
 1. **Smaller training set** — we train on 50 images, the paper uses up to 240 in CV

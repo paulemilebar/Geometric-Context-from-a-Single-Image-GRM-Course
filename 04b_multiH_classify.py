@@ -190,10 +190,11 @@ def train_homog_classifier(X, y_homog, weights):
 # Prédiction multi-hypothèses — Équation 2
 # ══════════════════════════════════════════════════════════════════════════════
 
-def predict_image_multiH(hd, label_clf, homog_clf):
+def predict_image_multiH(hd, label_clf, homog_clf, return_confidence=False):
     """
     Applique l'Équation 2 pour une image.
     Retourne : preds (n_sp,) label prédit (1/2/3) pour chaque superpixel feat-indexé.
+    Si return_confidence est True, retourne (preds, confidence).
     """
     n_sp       = hd["n_sp"]
     # confidence accumulée sur les 9 hypothèses : (n_sp, 3)
@@ -234,6 +235,8 @@ def predict_image_multiH(hd, label_clf, homog_clf):
 
     # label prédit = argmax + 1  (pour revenir en 1-indexed)
     preds = confidence.argmax(axis=1).astype(np.int32) + 1
+    if return_confidence:
+        return preds, confidence
     return preds
 
 
