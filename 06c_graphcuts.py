@@ -322,9 +322,7 @@ def alpha_expansion(unary, adjacency, weights, lam, max_iters=MAX_EXPANSION_ITER
     return labels
 
 
-# =========================
 # DATA LOADING
-# =========================
 def load_split_data(ds, indices):
     X, y = [], []
 
@@ -344,9 +342,7 @@ def load_split_data(ds, indices):
     return np.vstack(X), np.concatenate(y)
 
 
-# =========================
 # INFERENCE PER IMAGE
-# =========================
 def run_gc_on_image(ft, sp, clf, scaler, track_energy=False):
     feats = ft["features"]
     segments = sp["segments"]
@@ -396,9 +392,7 @@ def run_gc_on_image(ft, sp, clf, scaler, track_energy=False):
     return pred_map
 
 
-# =========================
 # METRICS
-# =========================
 def pixel_accuracy_gc(ds, indices, clf, scaler):
     correct = total = 0
 
@@ -418,9 +412,7 @@ def pixel_accuracy_gc(ds, indices, clf, scaler):
     return correct / total if total > 0 else 0.0
 
 
-# =========================
 # PLOTS
-# =========================
 def plot_confusion_gc(ds, indices, clf, scaler, save_path):
     all_preds, all_true = [], []
 
@@ -656,9 +648,7 @@ def plot_results_heatmap(results, lambda_values, beta_values, save_path):
     print(f"Heatmap saved to {save_path}")
 
 
-# =========================
 # MAIN
-# =========================
 def main():
     ds = HoiemDataset(root_dir=DATASET_DIR)
     train_ds, test_ds = ds.get_split()

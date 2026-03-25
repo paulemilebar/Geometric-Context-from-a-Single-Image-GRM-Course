@@ -19,15 +19,15 @@ OUT_DIR     = Path("outputs"); OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # HYPERPARAMETERS SET UP
 LAMBDA_PAIRWISE = 0.1
-BETA = 0.05
+BETA = 0.1
 BETA_COLOR = 0.2
 BETA_TEXTURE = 0.1
-BETA_POS = 0.08
+BETA_POS = 0.05
 N_ITERS = 15
-MAX_IMAGES = 90 # fro grid search
+MAX_IMAGES = 90
 BETA = 0.05
 
-# ENERGY COMPUTATION
+# ENERGY
 def compute_energy(labels, unary, adjacency, lam, weights):
     E = np.sum(unary[np.arange(len(labels)), labels])
     for i in range(len(labels)):
@@ -233,7 +233,7 @@ def load_split_data(ds, indices):
 
         mask = labels > 0
         X.append(feats[mask])
-        y.append(labels[mask] - 1)
+        y.append(labels[mask])
 
     return np.vstack(X), np.concatenate(y)
 
@@ -254,8 +254,8 @@ def run_bp_on_image(ft, sp, clf, scaler, track_energy=False):
     # either we separate the the feature comparaision based on colors, location and texture. compute_pairwise_weights_color_texture_position()
     # Or we just compute the comparaision based on ALL features. compute_pairwise_weights()
 
-    weights = compute_pairwise_weights_color_texture_position(adjacency, X, beta_color=BETA_COLOR, beta_texture=BETA_TEXTURE, beta_pos=BETA_POS)
-    #weights = compute_pairwise_weights(adjacency, X, beta=BETA)
+    #weights = compute_pairwise_weights_color_texture_position(adjacency, X, beta_color=BETA_COLOR, beta_texture=BETA_TEXTURE, beta_pos=BETA_POS)
+    weights = compute_pairwise_weights(adjacency, X, beta=BETA)
     if track_energy:
         preds, energy_curve = belief_propagation_reparametrization(
                 unary, adjacency, weights,
@@ -271,10 +271,11 @@ def run_bp_on_image(ft, sp, clf, scaler, track_energy=False):
     pred_map = np.zeros_like(segments)
     sp_ids = np.unique(segments)
     sp_ids_sorted = np.sort(sp_ids)
+    classes = clf.classes_ 
 
 
     for i, sp_id in enumerate(sp_ids_sorted):
-        pred_map[segments == sp_id] = preds[i] + 1
+        pred_map[segments == sp_id] = classes[preds[i]]
 
     if track_energy:
         return pred_map, energy_curve
@@ -420,17 +421,11 @@ def main():
     test_indices = test_ds._i
 
     print("Loading features...")
-    X_tr, y_tr = load_split_data(ds, train_indices)
+    with open(MODEL_DIR / "adaboost.pkl", "rb") as f:
+        data = pickle.load(f)
 
-    scaler = StandardScaler().fit(X_tr)
-    X_tr = scaler.transform(X_tr)
-
-    clf = AdaBoostClassifier(
-        estimator=DecisionTreeClassifier(max_depth=3),
-        n_estimators=200,
-        random_state=42,
-    )
-    clf.fit(X_tr, y_tr)
+    clf = data["clf"]
+    scaler = data["scaler"]
 
     print("\nRunning BP inference...")
     acc = pixel_accuracy_bp(ds, test_indices, clf, scaler)
@@ -527,9 +522,10 @@ def hyperparameter_grid_search(ds, test_indices, clf, scaler,
 
                 pred_map = np.zeros_like(segments)
                 sp_ids = np.unique(segments)
+                classes = clf.classes_ 
 
                 for i, sp_id in enumerate(np.sort(sp_ids)):
-                    pred_map[segments == sp_id] = preds[i] + 1
+                    pred_map[segments == sp_id] = classes[preds[i]] + 1
 
                 valid = label_map > 0
                 correct += (pred_map[valid] == label_map[valid]).sum()
@@ -634,9 +630,10 @@ def hyperparameter_grid_search_ctp(
 
                         pred_map = np.zeros_like(segments)
                         sp_ids = np.unique(segments)
+                        classes = clf.classes_ 
 
                         for i, sp_id in enumerate(np.sort(sp_ids)):
-                            pred_map[segments == sp_id] = preds[i] + 1
+                            pred_map[segments == sp_id] = classes[preds[i]] + 1
 
                         valid = label_map > 0
                         correct += (pred_map[valid] == label_map[valid]).sum()
@@ -693,6 +690,13 @@ def grid_search():
         #lambda_values, beta_values,
         #max_images=100, 
     #)
+    
+    #plot_results_heatmap(
+    #    results,
+    #    lambda_values,
+    #    beta_values,
+    #    OUT_DIR / "grid_search_heatmap.png"
+    #)
 
     # =========================
     # GRID SEARCH PARAMETERS WITH SEPARATED FEATURES COLORS POSITION AND TEXTURE
@@ -722,13 +726,6 @@ def grid_search():
     # =========================
     # HEATMAP
     # =========================
-
-    #plot_results_heatmap(
-    #    results,
-    #    lambda_values,
-    #    beta_values,
-    #    OUT_DIR / "grid_search_heatmap.png"
-   # )
 
     # BEST PARAMS
 

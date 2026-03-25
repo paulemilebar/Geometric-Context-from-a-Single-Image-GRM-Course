@@ -9,6 +9,10 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import confusion_matrix
 import pickle
+import json
+import csv
+from datetime import datetime
+
 
 sys.path.insert(0, "src")
 from dataset import HoiemDataset, LABEL_NAMES, LABEL_COLORS, LABEL_IDS
@@ -186,9 +190,7 @@ def compute_node_beliefs(unary_init, messages, adj):
     return beliefs
 
 
-# ============================================================
 # RIGOROUS RESIDUAL BP WITH EXPLICIT DIRECTED MESSAGES
-# ============================================================
 def belief_propagation_reparametrization(
     unary_init,
     adjacency,
@@ -201,7 +203,6 @@ def belief_propagation_reparametrization(
     """
     Residual min-sum BP with explicit directed messages.
 
-    This is more rigorous than the previous edge-order heuristic:
     - we store directed messages m_{i->j}
     - residual is ||m_new - m_old||_inf
     - we update asynchronously the message with largest residual
@@ -283,7 +284,6 @@ def belief_propagation_reparametrization(
         m_new = compute_local_message(i, j, unary_init, pairwise, messages, adj)
         true_res = np.max(np.abs(m_new - m_old))
 
-        # If the popped residual was stale, push the fresh one back
         if true_res < -neg_res - 1e-12:
             heapq.heappush(heap, (-true_res, counter, (i, j)))
             counter += 1
@@ -328,9 +328,7 @@ def belief_propagation_reparametrization(
     return labels
 
 
-# ============================================================
 # DATA LOADING
-# ============================================================
 def load_split_data(ds, indices):
     X, y = [], []
 
@@ -350,9 +348,7 @@ def load_split_data(ds, indices):
     return np.vstack(X), np.concatenate(y)
 
 
-# ============================================================
 # INFERENCE PER IMAGE
-# ============================================================
 def run_bp_on_image(ft, sp, clf, scaler, track_energy=False):
     feats = ft["features"]
     segments = sp["segments"]
@@ -399,9 +395,7 @@ def run_bp_on_image(ft, sp, clf, scaler, track_energy=False):
     return pred_map
 
 
-# ============================================================
 # METRICS
-# ============================================================
 def pixel_accuracy_bp(ds, indices, clf, scaler):
     correct = total = 0
 
@@ -421,9 +415,7 @@ def pixel_accuracy_bp(ds, indices, clf, scaler):
     return correct / total
 
 
-# ============================================================
 # PLOTS
-# ============================================================
 def plot_confusion_bp(ds, indices, clf, scaler, save_path):
     all_preds, all_true = [], []
 
@@ -539,9 +531,7 @@ def plot_energy_curves(ds, indices, clf, scaler, save_path, n=5):
     plt.close()
 
 
-# ============================================================
 # MAIN
-# ============================================================
 def main():
     ds = HoiemDataset(root_dir=DATASET_DIR)
     train_ds, test_ds = ds.get_split()
@@ -579,11 +569,6 @@ def main():
 
     with open(MODEL_DIR / "bp_model.pkl", "wb") as f:
         pickle.dump({"clf": clf, "scaler": scaler}, f)
-
-
-import json
-import csv
-from datetime import datetime
 
 
 def save_results(results, out_dir):
