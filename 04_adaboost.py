@@ -84,6 +84,7 @@ def cross_validate(ds, cv_indices, n_folds=5):
     # cv_indices are grouped in blocks of 50 (hoiem convention)
     fold_size = len(cv_indices) // n_folds
     accs = []
+    per_cls_folds = []   # collect per-class acc per fold
 
     for fold in range(n_folds):
         val_idx   = cv_indices[fold*fold_size : (fold+1)*fold_size]
@@ -104,10 +105,13 @@ def cross_validate(ds, cv_indices, n_folds=5):
 
         acc, per_cls = pixel_accuracy(ds, val_idx, clf, scaler)
         accs.append(acc)
+        per_cls_folds.append(per_cls)
         print(f"    pixel acc: {acc:.4f}  "
               f"ground={per_cls[1]:.3f}  vert={per_cls[2]:.3f}  sky={per_cls[3]:.3f}")
 
-    return accs
+    # average per-class accuracies across folds
+    avg_per_cls = {l: np.mean([f[l] for f in per_cls_folds]) for l in LABEL_IDS}
+    return accs, avg_per_cls
 
 
 def plot_confusion(ds, indices, clf, scaler, save_path):
@@ -226,16 +230,18 @@ def main():
     # 3a) 5-fold cross-validation on cv_images only (250 images) — current setup
     print("\n5-fold cross-validation on cv_images (250 images)...")
     cv_global = test_indices
-    fold_accs = cross_validate(ds, cv_global, n_folds=5)
+    fold_accs, cv_per_cls = cross_validate(ds, cv_global, n_folds=5)
     print(f"\ncv results: {[f'{a:.4f}' for a in fold_accs]}")
     print(f"mean={np.mean(fold_accs):.4f}  std={np.std(fold_accs):.4f}")
+    print(f"  cv per-class avg:  ground={cv_per_cls[1]:.4f}  vert={cv_per_cls[2]:.4f}  sky={cv_per_cls[3]:.4f}")
 
     # 3b) 5-fold CV on ALL 300 images — matches hoiem 2005 protocol (240 train / 60 val)
     print("\n5-fold cross-validation on ALL 300 images (hoiem protocol)...")
     all_indices = list(range(len(ds)))
-    fold_accs_all = cross_validate(ds, all_indices, n_folds=5)
+    fold_accs_all, cv300_per_cls = cross_validate(ds, all_indices, n_folds=5)
     print(f"\ncv300 results: {[f'{a:.4f}' for a in fold_accs_all]}")
     print(f"mean={np.mean(fold_accs_all):.4f}  std={np.std(fold_accs_all):.4f}")
+    print(f"  cv300 per-class avg:  ground={cv300_per_cls[1]:.4f}  vert={cv300_per_cls[2]:.4f}  sky={cv300_per_cls[3]:.4f}")
     print(f"  hoiem 2005 baseline  : 0.8600")
 
     # 4) feature importance

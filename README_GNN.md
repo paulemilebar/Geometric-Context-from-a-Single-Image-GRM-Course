@@ -108,14 +108,19 @@ Test set: **250 images** (`cv_images`)
 
 | Method | Overall | Ground | Vertical | Sky |
 |--------|---------|--------|----------|-----|
-| AdaBoost (ours, train=50) | 0.7906 | 0.769 | 0.763 | 0.893 |
-| AdaBoost (5-fold CV, train=200) | 0.8119 | — | — | — |
-| **GNN improved (ours)** | **0.8294** | **0.680** | **0.861** | **0.851** |
+| SPixel / AdaBoost (train=50, test=250) | 0.7906 | 0.769 | 0.763 | 0.893 |
+| OneH (1 hypothesis, test=100) | 0.7886 | — | — | — |
+| MultiH (9 hypotheses, train=50, test=250) | 0.8256 | 0.792 | 0.802 | 0.936 |
+| MultiH (5-fold CV, train=200) | 0.8265 | — | — | — |
+| **GNN without Attention (train=50)** | 0.7983 | 0.666 | 0.815 | 0.812 |
+| **GNN improved (ours, train=50)** | **0.8294** | **0.680** | **0.861** | **0.851** |
 | Hoiem et al. 2005 | 0.8600 | — | — | — |
 
 ### Analysis
 
-The improved GNN reaches **0.8294** pixel accuracy, which is **+3.9 points** above AdaBoost on the same training split. This result is only **3.1 points** below the paper's reported 0.86.
+The improved GNN reaches **0.8294** pixel accuracy. Not only is this **+3.9 points** above the baseline SPixel AdaBoost, but it actually slightly outperforms the **MultiH fusion model (0.8256)** on the same training split! 
+
+This is a very powerful result: it shows that we can achieve the same (even slightly better) performance using a single superpixel segmentation map modeled as a Graph Neural Network, compared to Hoiem's complex multiple-hypothesis fusion approach. It is only **3.1 points** below the paper's reported 0.86.
 
 The remaining gap to the paper comes from:
 1. **Smaller training set** — we train on 50 images, the paper uses up to 240 in CV
