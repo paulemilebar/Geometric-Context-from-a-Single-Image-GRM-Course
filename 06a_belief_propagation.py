@@ -8,6 +8,9 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import confusion_matrix
 import pickle
+import json
+import csv
+from datetime import datetime
 
 sys.path.insert(0, "src")
 from dataset import HoiemDataset, LABEL_NAMES, LABEL_COLORS, LABEL_IDS
@@ -50,8 +53,6 @@ def to_adj_dict(adjacency):
             neighbors = np.where(adjacency[i] > 0)[0]
             adj[i] = set(map(int, neighbors))
         return adj
-
-    raise TypeError("Unsupported adjacency type")
 
 # PAIRWISE WEIGHTS (ALL FEATURES-BASED)
 def compute_pairwise_weights(adjacency, features, beta=BETA):
@@ -252,7 +253,7 @@ def run_bp_on_image(ft, sp, clf, scaler, track_energy=False):
 
     # 2 DIFFERENT APPROACHES : 
     # either we separate the the feature comparaision based on colors, location and texture. compute_pairwise_weights_color_texture_position()
-    # Or we just compute the comparaision based on ALL features. compute_pairwise_weights()
+    # Or we just compute the comparaision based on ALL features. compute_pairwise_weights(). Just comment or uncomment the function you want to use.
 
     #weights = compute_pairwise_weights_color_texture_position(adjacency, X, beta_color=BETA_COLOR, beta_texture=BETA_TEXTURE, beta_pos=BETA_POS)
     weights = compute_pairwise_weights(adjacency, X, beta=BETA)
@@ -417,7 +418,6 @@ def main():
     ds = HoiemDataset(root_dir=DATASET_DIR)
     train_ds, test_ds = ds.get_split()
 
-    train_indices = train_ds._i
     test_indices = test_ds._i
 
     print("Loading features...")
@@ -450,12 +450,6 @@ def main():
 
     with open(MODEL_DIR / "bp_model.pkl", "wb") as f:
         pickle.dump({"clf": clf, "scaler": scaler}, f)
-
-
-
-import json
-import csv
-from datetime import datetime
 
 
 def save_results(results, out_dir):
@@ -736,7 +730,7 @@ def grid_search():
     print(f"beta   = {best['beta']}")
     print(f"acc    = {best['accuracy']:.4f}")
 
-## NOTE : IF YOU WANT TO DO A GRID SEARCH TO STUDY THE INFLUENCE ON HYPERPARAMETERS LAMBDA AND BETA UNCOMMENT grid_search() AND COMMENT main(). 
+## NOTE : IF YOU WANT TO DO A GRID SEARCH TO STUDY THE INFLUENCE ON HYPERPARAMETERS LAMBDA AND BETA UNCOMMENT grid_search() AND COMMENT main(). Also, be careful, on what you comment or uncomment in the function grid_search()
 if __name__ == "__main__":
     main()
     #grid_search()

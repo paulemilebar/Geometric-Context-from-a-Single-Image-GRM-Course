@@ -24,9 +24,7 @@ DATASET_DIR = Path("dataset")
 MODEL_DIR   = Path("data/models"); MODEL_DIR.mkdir(parents=True, exist_ok=True)
 OUT_DIR     = Path("outputs"); OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# =========================
 # HYPERPARAMETERS
-# =========================
 LAMBDA_PAIRWISE = 0.1
 BETA = 0.05
 BETA_COLOR = 0.2
@@ -39,9 +37,7 @@ MAX_EXPANSION_ITERS = 20
 GC_EPS = 1e-10
 
 
-# =========================
 # UTILS
-# =========================
 def to_adj_dict(adjacency):
     if isinstance(adjacency, dict):
         return {int(i): set(map(int, neigh)) for i, neigh in adjacency.items()}
@@ -53,8 +49,6 @@ def to_adj_dict(adjacency):
             neighbors = np.where(adjacency[i] > 0)[0]
             adj[i] = set(map(int, neighbors))
         return adj
-
-    raise TypeError("Unsupported adjacency type")
 
 
 def unique_undirected_edges(adjacency):
@@ -68,9 +62,7 @@ def unique_undirected_edges(adjacency):
     return sorted(edges)
 
 
-# =========================
 # PAIRWISE WEIGHTS
-# =========================
 def compute_pairwise_weights(adjacency, features, beta=BETA):
     weights = {}
     for i in adjacency:
@@ -118,9 +110,7 @@ def compute_pairwise_weights_color_texture_position(
     return weights
 
 
-# =========================
 # ENERGY
-# =========================
 def compute_multilabel_energy(labels, unary, adjacency, weights, lam):
     E = float(np.sum(unary[np.arange(len(labels)), labels]))
     for i, j in unique_undirected_edges(adjacency):
@@ -129,9 +119,7 @@ def compute_multilabel_energy(labels, unary, adjacency, weights, lam):
     return E
 
 
-# =========================
 # BINARY GRAPH-CUT REDUCTION
-# =========================
 def add_unary_cost(G, node, cost0, cost1, source="s", sink="t"):
     """
     x=0 <=> node in source side
@@ -198,9 +186,7 @@ def add_submodular_pairwise(G, node_i, node_j, A, B, C, D, constant_shift, sourc
         G.add_edge(node_i, node_j, capacity=G.get_edge_data(node_i, node_j, {}).get("capacity", 0.0) + float(k))
 
 
-# =========================
 # ALPHA-EXPANSION MOVE
-# =========================
 def alpha_expansion_move(current_labels, alpha, unary, adjacency, weights, lam):
     """
     One alpha-expansion move for weighted Potts model:
@@ -526,9 +512,7 @@ def plot_energy_curves_gc(ds, indices, clf, scaler, save_path, n=5):
     plt.close()
 
 
-# =========================
 # SAVE RESULTS
-# =========================
 def save_results(results, out_dir):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -547,9 +531,7 @@ def save_results(results, out_dir):
     print(f"\nResults saved to:\n{json_path}\n{csv_path}")
 
 
-# =========================
 # GRID SEARCH
-# =========================
 def hyperparameter_grid_search_gc(
     ds, test_indices, clf, scaler,
     lambda_values, beta_values,

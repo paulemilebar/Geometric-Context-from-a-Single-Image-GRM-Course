@@ -33,9 +33,7 @@ MAX_IMAGES = 90
 BETA = 0.05
 
 
-# ============================================================
 # ENERGY
-# ============================================================
 def compute_energy(labels, unary, adjacency, lam, weights):
     E = np.sum(unary[np.arange(len(labels)), labels])
     for i in range(len(labels)):
@@ -46,9 +44,7 @@ def compute_energy(labels, unary, adjacency, lam, weights):
     return E
 
 
-# ============================================================
 # ADJACENCY
-# ============================================================
 def to_adj_dict(adjacency):
     if isinstance(adjacency, dict):
         return {int(i): set(map(int, neigh)) for i, neigh in adjacency.items()}
@@ -64,9 +60,7 @@ def to_adj_dict(adjacency):
     raise TypeError("Unsupported adjacency type")
 
 
-# ============================================================
 # PAIRWISE WEIGHTS (ALL FEATURES-BASED)
-# ============================================================
 def compute_pairwise_weights(adjacency, features, beta=BETA):
     weights = {}
 
@@ -82,9 +76,7 @@ def compute_pairwise_weights(adjacency, features, beta=BETA):
     return weights
 
 
-# ============================================================
 # PAIRWISE WEIGHTS (DIFFERENT WEIGHTS FOR DIFFERENT TYPE OF FEATURES)
-# ============================================================
 def compute_pairwise_weights_color_texture_position(
     adjacency,
     features,
@@ -129,9 +121,7 @@ def compute_pairwise_weights_color_texture_position(
     return weights
 
 
-# ============================================================
-# BELIEF PROPAGATION HELPERS
-# ============================================================
+# BELIEF PROPAGATION
 def compute_energy_full(labels, unary, pairwise, adjacency):
     E = 0.0
 
@@ -190,7 +180,7 @@ def compute_node_beliefs(unary_init, messages, adj):
     return beliefs
 
 
-# RIGOROUS RESIDUAL BP WITH EXPLICIT DIRECTED MESSAGES
+# RESIDUAL-ORDER BP WITH EXPLICIT DIRECTED MESSAGES
 def belief_propagation_reparametrization(
     unary_init,
     adjacency,
@@ -216,7 +206,7 @@ def belief_propagation_reparametrization(
     weights : dict
         Pairwise weights for edges.
     n_iters : int
-        Approximate number of full passes over the directed edges.
+        number of full passes over the directed edges.
     lam : float
         Pairwise Potts strength.
     track_energy : bool
@@ -536,7 +526,6 @@ def main():
     ds = HoiemDataset(root_dir=DATASET_DIR)
     train_ds, test_ds = ds.get_split()
 
-    train_indices = train_ds._i
     test_indices = test_ds._i
 
     print("Loading features...")

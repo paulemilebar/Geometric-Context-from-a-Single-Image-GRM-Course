@@ -11,8 +11,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix
 
-# IMPORTANT:
-# on ajoute le dossier src relativement à CE fichier
 ROOT_DIR = Path(__file__).resolve().parent
 SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
@@ -49,14 +47,6 @@ def load_hypothesis(imname):
 
 # MULTIH PROBAS
 def predict_image_multiH_proba(hd, label_clf, homog_clf):
-    """
-    return probabilities MultiH at superpixel level
-
-    Output:
-        probas : (n_sp, 3)
-                 colonnes dans l'ordre interne [ground, vertical, sky]
-                 correspondant aux labels dataset [1, 2, 3].
-    """
     n_sp = hd["n_sp"]
     confidence = np.zeros((n_sp, 3), dtype=np.float64)
     homog_sum = np.zeros(n_sp, dtype=np.float64)
@@ -72,7 +62,7 @@ def predict_image_multiH_proba(hd, label_clf, homog_clf):
         # P(label=v | region)
         label_proba = label_clf.predict_proba(reg_feats)   # (nr, 3)
 
-        # P(region homogène)
+        # P(region homogeneous)
         if hasattr(homog_clf, "classes_") and len(homog_clf.classes_) == 2:
             homog_proba = homog_clf.predict_proba(reg_feats)[:, 1]
         else:
@@ -327,9 +317,7 @@ def run_bp_on_image(ft, sp, meta, label_clf, homog_clf, track_energy=False):
     return pred_map
 
 
-# =========================
 # METRICS
-# =========================
 def pixel_accuracy_bp(ds, indices, label_clf, homog_clf):
     correct = 0
     total = 0
@@ -482,9 +470,7 @@ def plot_energy_curves(ds, indices, label_clf, homog_clf, save_path, n=5):
     plt.close()
 
 
-# =========================
 # RESULTS SAVE
-# =========================
 def save_results(results, out_dir):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
