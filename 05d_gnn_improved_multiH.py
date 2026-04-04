@@ -1,11 +1,3 @@
-"""
-05d_gnn_improved_multiH.py — Improved GNN with MultiH prior.
-
-Modified version of 05b_gnn_improved.py that uses the confidence probabilities
-from the 9-hypotheses fusion model (04b_multiH_classify.py) instead of the 
-simple SPixel AdaBoost model.
-"""
-
 import sys
 import numpy as np
 import torch
@@ -28,14 +20,13 @@ DATASET_DIR = Path("dataset")
 MODEL_DIR   = Path("data/models"); MODEL_DIR.mkdir(parents=True, exist_ok=True)
 OUT_DIR     = Path("outputs");     OUT_DIR.mkdir(exist_ok=True)
 
-# ── hyper-parameters ──────────────────────────────────────────────────────────
 BASE_DIM     = 78          # raw superpixel features
 ADA_DIM      = 3           # appended AdaBoost class probabilities
 IN_DIM       = BASE_DIM + ADA_DIM   # 81
 HIDDEN_DIM   = 256
 N_CLASSES    = 3
 N_LAYERS     = 4
-N_HEADS      = 4           # must divide HIDDEN_DIM evenly
+N_HEADS      = 4          
 DROPOUT      = 0.25
 LR           = 3e-4
 WEIGHT_DECAY = 5e-4
@@ -46,7 +37,6 @@ LABEL_SMOOTH = 0.05
 from sklearn.base import clone
 
 class ManualOneVsRest:
-    """Un OneVsRest personnalisé qui ignore les bugs de routage de scikit-learn 1.4+"""
     def __init__(self, base_estimator):
         self.base_estimator = base_estimator
         self.estimators_ = []
@@ -73,7 +63,6 @@ class ManualOneVsRest:
         return self.classes_[np.argmax(probas, axis=1)]
 
 
-# ── MultiH prior feature injection ─────────────────────────────────────────
 
 try:
     multiH = importlib.import_module("04b_multiH_classify")
@@ -113,7 +102,6 @@ def augment_features(feats: np.ndarray, imname: str) -> np.ndarray:
     return np.concatenate([feats, proba], axis=1)
 
 
-# ── graph utilities ───────────────────────────────────────────────────────────
 
 def adj_to_edge_index(adj: np.ndarray, device):
     """
@@ -146,11 +134,10 @@ def build_graph(ft_data: dict, sp_data: dict, meta: dict, device):
     return x, y, src, dst
 
 
-# ── model ─────────────────────────────────────────────────────────────────────
 
 class GATLayer(nn.Module):
     """
-    Multi-head Graph Attention layer — pure PyTorch, no PyG/scatter needed.
+    Multi-head Graph Attention layer
 
     Implements:
         e_ij  = LeakyReLU( a_src · W h_i  +  a_dst · W h_j )
@@ -176,12 +163,12 @@ class GATLayer(nn.Module):
         N  = x.size(0)
         Wx = self.W(x).view(N, self.n_heads, self.head_dim)   # (N, H, D)
 
-        # Attention scores  (E, H)
+        # attention scores  (E, H)
         e_src = (Wx[src_idx] * self.a_src).sum(dim=-1)
         e_dst = (Wx[dst_idx] * self.a_dst).sum(dim=-1)
         e     = self.leaky(e_src + e_dst)
 
-        # Stable softmax per destination node
+        # stable softmax per destination node
         # Subtract global max per head for numerical stability
         e_shifted = e - e.max(dim=0, keepdim=True)[0]        # (E, H)
         exp_e     = torch.exp(e_shifted)                       # (E, H)
@@ -217,18 +204,15 @@ class ImprovedGNN(nn.Module):
                  n_classes: int = N_CLASSES, n_layers: int = N_LAYERS,
                  n_heads: int = N_HEADS, dropout: float = DROPOUT):
         super().__init__()
-        # Project raw features into the hidden space
         self.input_proj = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ELU(),
         )
-        # Stacked GAT blocks (constant width → easy residuals)
         self.blocks = nn.ModuleList([
             GATBlock(hidden_dim, n_heads, dropout)
             for _ in range(n_layers)
         ])
-        # Classification head
         self.classifier = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ELU(),
@@ -242,8 +226,6 @@ class ImprovedGNN(nn.Module):
             x = blk(x, src_idx, dst_idx)
         return self.classifier(x)                  # (N, 3) logits
 
-
-# ── data loading ──────────────────────────────────────────────────────────────
 
 def load_split_indices(ds):
     train_ds, test_ds = ds.get_split()
@@ -272,10 +254,9 @@ def iter_batches(ds, indices, batch_size, device, shuffle=True):
             yield graphs
 
 
-# ── class weights ─────────────────────────────────────────────────────────────
 
 def compute_class_weights(ds, indices, device):
-    """Compute inverse-frequency class weights from training superpixel labels."""
+    """Compute inverse-frequency class weights from training superpixel labels"""
     counts = np.zeros(N_CLASSES, dtype=np.float64)
     for idx in indices:
         _, _, meta = ds[idx]
@@ -292,7 +273,6 @@ def compute_class_weights(ds, indices, device):
     return torch.tensor(weights, dtype=torch.float32, device=device)
 
 
-# ── training ──────────────────────────────────────────────────────────────────
 
 def train_epoch(model, optimizer, ds, indices, device, class_weights=None):
     model.train()
@@ -345,7 +325,7 @@ def evaluate(model, ds, indices, device):
 
 @torch.no_grad()
 def pixel_accuracy(model, ds, indices, device):
-    """Pixel-level accuracy — fair comparison with AdaBoost."""
+    """Pixel-level accuracy : fair comparison with AdaBoost."""
     model.eval()
     correct = total = 0
 
@@ -373,7 +353,6 @@ def pixel_accuracy(model, ds, indices, device):
     return correct / max(1, total)
 
 
-# ── visualisation ─────────────────────────────────────────────────────────────
 
 def plot_curves(train_losses, train_accs, val_pix_accs, save_path):
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
@@ -436,7 +415,6 @@ def plot_predictions(model, ds, indices, device, save_path, n=6):
     plt.close()
 
 
-# ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -489,7 +467,6 @@ def main():
 
     print(f"\nbest val pixel acc (30-img subset): {best_val:.4f}")
 
-    # ── final evaluation ──────────────────────────────────────────────────────
     model.load_state_dict(
         torch.load(MODEL_DIR / "gnn_improved_multiH_best.pt", map_location=device)
     )

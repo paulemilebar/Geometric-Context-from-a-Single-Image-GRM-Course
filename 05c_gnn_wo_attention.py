@@ -19,14 +19,12 @@ DATASET_DIR = Path("dataset")
 MODEL_DIR   = Path("data/models"); MODEL_DIR.mkdir(parents=True, exist_ok=True)
 OUT_DIR     = Path("outputs");     OUT_DIR.mkdir(exist_ok=True)
 
-# ── hyper-parameters ──────────────────────────────────────────────────────────
 BASE_DIM     = 78          
 ADA_DIM      = 3           
 IN_DIM       = BASE_DIM + ADA_DIM   
 HIDDEN_DIM   = 256
 N_CLASSES    = 3
 N_LAYERS     = 4
-# N_HEADS a été retiré car il n'y a plus d'attention
 DROPOUT      = 0.25
 LR           = 3e-4
 WEIGHT_DECAY = 5e-4
@@ -34,7 +32,6 @@ EPOCHS       = 150
 BATCH_SIZE   = 16
 LABEL_SMOOTH = 0.05
 
-# ── AdaBoost prior feature injection ─────────────────────────────────────────
 def load_adaboost():
     p = MODEL_DIR / "adaboost.pkl"
     if not p.exists():
@@ -54,7 +51,6 @@ def augment_features(feats: np.ndarray) -> np.ndarray:
         proba = ADA_CLF.predict_proba(X).astype(np.float32)
     return np.concatenate([feats, proba], axis=1)
 
-# ── graph utilities ───────────────────────────────────────────────────────────
 def adj_to_edge_index(adj: np.ndarray, device):
     a = adj.copy().astype(np.uint8)
     np.fill_diagonal(a, 1)
@@ -80,13 +76,8 @@ def build_graph(ft_data: dict, sp_data: dict, device):
     src, dst  = adj_to_edge_index(adj, device)
     return x, y, src, dst
 
-# ── model (SANS ATTENTION) ────────────────────────────────────────────────────
 
 class SimpleGNNLayer(nn.Module):
-    """
-    Couche GNN basique (style GCN / GraphSAGE avec Mean Pooling)
-    Pas d'attention, juste une moyenne des caractéristiques des voisins.
-    """
     def __init__(self, in_dim: int, out_dim: int, dropout: float = 0.25):
         super().__init__()
         self.W = nn.Linear(in_dim, out_dim, bias=False)
@@ -96,17 +87,14 @@ class SimpleGNNLayer(nn.Module):
         N = x.size(0)
         Wx = self.W(x)  # (N, out_dim)
 
-        # Calcul du degré de chaque nœud destination pour faire une moyenne
         deg = torch.zeros(N, 1, device=x.device)
         deg.index_add_(0, dst_idx, torch.ones_like(dst_idx, dtype=torch.float).unsqueeze(-1))
-        deg = deg.clamp(min=1.0)  # Éviter la division par zéro
-
-        # Agrégation des messages (Somme simple)
+        deg = deg.clamp(min=1.0)
         msg = Wx[src_idx]
         out = torch.zeros_like(Wx)
         out.index_add_(0, dst_idx, msg)                        
         
-        # Mean pooling : on divise la somme par le nombre de voisins
+        # Mean pooling
         out = out / deg
         out = F.dropout(out, p=self.dropout, training=self.training)
         return out
@@ -154,7 +142,6 @@ class ImprovedSimpleGNN(nn.Module):
             x = blk(x, src_idx, dst_idx)
         return self.classifier(x)                  
 
-# ── reste du code (identique) ─────────────────────────────────────────────────
 
 def load_split_indices(ds):
     train_ds, test_ds = ds.get_split()
@@ -339,7 +326,6 @@ def main():
     val_subset = test_indices[:30]      
     print(f"train: {len(train_indices)} images | test: {len(test_indices)} images")
 
-    # On utilise maintenant le modèle SimpleGNN
     model = ImprovedSimpleGNN().to(device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"model : {N_LAYERS} Simple GNN blocks | hidden={HIDDEN_DIM} | params={n_params:,}")

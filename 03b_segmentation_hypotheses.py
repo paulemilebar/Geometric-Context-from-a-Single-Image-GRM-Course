@@ -1,39 +1,3 @@
-"""
-03b_segmentation_hypotheses.py  —  Hoiem 2005, Section 3.1  (étape manquante)
-══════════════════════════════════════════════════════════════════════════════
-
-Pipeline implémenté :
-
-  Étape A — Modèle d'affinité  (50 images d'entraînement)
-  ─────────────────────────────────────────────────────────
-  • Échantillonne 2 500 paires de superpixels de MÊME classe  (y=1)
-             et  2 500 paires de superpixels de CLASSE DIFFÉRENTE (y=0)
-  • Features d'entrée : |x_i − x_j|  (différence absolue des 78 features)
-  • Modèle : AdaBoost logistique (SAMME.R) avec arbres de décision
-  • Sortie  : log-odds  log P(même classe) / P(classe différente)
-
-  Étape B — Algorithme glouton d'hypothèses  (300 images)
-  ─────────────────────────────────────────────────────────
-  Pour chaque nr ∈ {3,4,5,7,9,11,15,20,25}  (nombre de régions voulu) :
-    1. Ordonner aléatoirement les superpixels
-    2. Assigner les nr premiers à des régions distinctes
-    3. Assigner chaque superpixel restant à la région maximisant
-       la log-vraisemblance d'affinité moyenne avec ses membres
-    4. Répéter l'étape 3  N_GREEDY_IT fois
-
-  Étape C — Features de régions
-  ──────────────────────────────
-  Pour chaque région (union de masques superpixels) : calculer les 78 features
-  sur le masque pixel de la région entière  (et non plus par superpixel).
-
-Sorties :
-  data/models/affinity_adaboost.pkl   — modèle d'affinité
-  data/hypotheses/{stem}.npy          — hypothèses + features de régions
-
-À lancer APRÈS 02_superpixels.py et 03_features.py.
-Puis lancer 04b_multiH_classify.py pour l'évaluation complète Hoiem.
-"""
-
 import sys, pickle
 import numpy as np
 import matplotlib; matplotlib.use("Agg")
@@ -55,18 +19,13 @@ HYPO_CACHE   = Path("data/hypotheses"); HYPO_CACHE.mkdir(parents=True, exist_ok=
 MODEL_DIR    = Path("data/models");     MODEL_DIR.mkdir(parents=True, exist_ok=True)
 OUT_DIR      = Path("outputs");         OUT_DIR.mkdir(exist_ok=True)
 
-# ── Hyper-paramètres Hoiem 2005 ───────────────────────────────────────────────
-NR_VALUES     = [3, 4, 5, 7, 9, 11, 15, 20, 25]   # nr ∈ section 3.1
-N_PAIRS_EACH  = 2_500   # paires same-label ET diff-label (section 3.1)
-N_GREEDY_IT   = 3       # répétitions de l'étape 3 du glouton
-HOMOG_TOL     = 0.05    # ≤ 5 % de pixels non-majoritaires = "homogène" (footnote 3)
-AFF_N_EST     = 100     # estimateurs AdaBoost pour le modèle d'affinité
-AFF_DEPTH     = 3       # max_depth ≈ 8 feuilles (cohérent avec section 3.2)
+NR_VALUES     = [3, 4, 5, 7, 9, 11, 15, 20, 25]
+N_PAIRS_EACH  = 2_500
+N_GREEDY_IT   = 3
+HOMOG_TOL     = 0.05
+AFF_N_EST     = 100
+AFF_DEPTH     = 3
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# FeatureExtractor  (identique à 03_features.py — copié pour autonomie)
-# ══════════════════════════════════════════════════════════════════════════════
 
 HORIZON_RATIO = 0.40
 N_DOOG        = 12
@@ -101,7 +60,7 @@ def _apply_doog(gray):
 
 
 class FeatureExtractor:
-    """Calcule les 78 features Hoiem sur un masque pixel quelconque."""
+    """get the 78 features for a given mask"""
 
     def __init__(self, image):
         self.H, self.W = image.shape[:2]
@@ -111,9 +70,8 @@ class FeatureExtractor:
         self.gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         self.doog = _apply_doog(self.gray)
         self.horizon_y = self.H * HORIZON_RATIO
-        self._lines_cache = None   # Hough lines calculées une seule fois
+        self._lines_cache = None
 
-    # ── couleur ───────────────────────────────────────────────────────────────
     def _color(self, mask):
         f  = []
         f += self.rgb[mask].mean(axis=0).tolist()                      # C1 (3)
@@ -128,13 +86,10 @@ class FeatureExtractor:
         f += sh.tolist() + [float(entropy(sh + 1e-8))]                # C4 (4)
         return np.array(f, dtype=np.float32)                           # → 16
 
-    # ── texture ───────────────────────────────────────────────────────────────
     def _texture(self, mask):
         t1 = self.doog[mask].mean(axis=0)                              # (12,)
         return np.array([*t1, t1.mean(), t1.argmax() / 11.0,
                          t1.max() - np.median(t1)], dtype=np.float32) # → 15
-
-    # ── localisation et forme ─────────────────────────────────────────────────
     def _location(self, mask):
         ys, xs = np.where(mask)
         xn, yn = xs / self.W, ys / self.H
@@ -156,7 +111,6 @@ class FeatureExtractor:
                          n_sp_norm, hull_sides, compact, x_range],
                         dtype=np.float32)                               # → 12
 
-    # ── géométrie (lignes / points de fuite) ──────────────────────────────────
     def _get_lines(self):
         if self._lines_cache is not None:
             return self._lines_cache
@@ -265,7 +219,7 @@ class FeatureExtractor:
         return np.concatenate([[g1, g2], g3, [g4, g5], g6, g7, [gx, gy]]).astype(np.float32)  # → 35
 
     def extract_region(self, mask):
-        """Retourne les 78 features pour un masque pixel arbitraire."""
+        """get the 78 features for a given mask"""
         if mask.sum() < 3:
             return np.zeros(78, dtype=np.float32)
         return np.concatenate([
@@ -276,15 +230,7 @@ class FeatureExtractor:
         ])                        # = 78
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Étape A — Modèle d'affinité
-# ══════════════════════════════════════════════════════════════════════════════
-
 def sample_affinity_pairs(ds, train_indices, rng):
-    """
-    Échantillonne N_PAIRS_EACH paires same-label et N_PAIRS_EACH paires diff-label.
-    Input features de chaque paire : |x_i - x_j|  (dim 78).
-    """
     print("  collecting superpixel features from training images...")
     all_feats, all_labels = [], []
     for idx in train_indices:
@@ -293,7 +239,7 @@ def sample_affinity_pairs(ds, train_indices, rng):
         if ft is None:
             continue
         sp_ids = ft.get("sp_ids", np.arange(len(ft["features"])))
-        sp_gt  = ft["sp_labels"][sp_ids]          # GT label indexé par feat index
+        sp_gt  = ft["sp_labels"][sp_ids]          # GT label indexed by feat index
         labeled = sp_gt > 0
         all_feats.append(ft["features"][labeled].astype(np.float32))
         all_labels.append(sp_gt[labeled])
@@ -303,10 +249,9 @@ def sample_affinity_pairs(ds, train_indices, rng):
     n          = len(all_feats)
     print(f"  {n} labeled superpixels from {len(train_indices)} images")
 
-    # Index par classe
     cls_idx = {l: np.where(all_labels == l)[0] for l in LABEL_IDS}
 
-    # Same-label pairs — échantillonnage équilibré par classe
+    # Same-label pairs : balanced sampling by class
     same_X = []
     for l in LABEL_IDS:
         idx = cls_idx[l]
@@ -318,7 +263,7 @@ def sample_affinity_pairs(ds, train_indices, rng):
         same_X.append(np.abs(all_feats[i] - all_feats[j]))
     same_X = np.vstack(same_X)[:N_PAIRS_EACH]
 
-    # Diff-label pairs — toutes les paires de classes
+    # Diff-label pairs : all pairs of classes
     diff_X  = []
     pairs_c = [(1,2), (1,3), (2,3)]
     n_each  = N_PAIRS_EACH // len(pairs_c)
@@ -349,21 +294,13 @@ def train_affinity_model(X, y):
     return clf
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Étape B — Algorithme glouton (vectorisé)
-# ══════════════════════════════════════════════════════════════════════════════
 
 def compute_affinity_matrix(feats, affinity_clf):
-    """
-    Calcule la matrice N×N de log-odds d'affinité entre superpixels.
-    Input :  feats (N, 78)
-    Output : aff_matrix (N, N)  symétrique,  valeurs = log P(même) / P(diff)
-    """
     n = len(feats)
     if n < 2:
         return np.zeros((n, n), dtype=np.float32)
 
-    i_idx, j_idx = np.triu_indices(n, k=1)          # paires du triangle supérieur
+    i_idx, j_idx = np.triu_indices(n, k=1)          # upper triangle pairs
     diffs = np.abs(feats[i_idx] - feats[j_idx])     # (n_pairs, 78)
 
     proba    = affinity_clf.predict_proba(diffs)     # (n_pairs, 2) : [P(diff), P(same)]
@@ -377,16 +314,6 @@ def compute_affinity_matrix(feats, affinity_clf):
 
 
 def greedy_group(aff_matrix, nr, rng):
-    """
-    Algorithme glouton Hoiem 2005 section 3.1 (vectorisé NumPy).
-
-    1. Ordonner aléatoirement les superpixels
-    2. Affecter les nr premiers à des régions distinctes (seeds)
-    3. Assigner chaque SP restant à la région avec la max log-vraisemblance moyenne
-    4. Répéter l'étape 3  N_GREEDY_IT fois
-
-    Retourne : assignment (n_sp,) — région 0..nr-1 pour chaque SP (indexé par feat index)
-    """
     n_sp = len(aff_matrix)
     nr   = min(nr, n_sp)
     order     = rng.permutation(n_sp)
@@ -398,7 +325,7 @@ def greedy_group(aff_matrix, nr, rng):
         assignment[s] = k
 
     for _ in range(N_GREEDY_IT):
-        # Matrice d'appartenance (nr, n_sp) : membership[k,j]=1 si j ∈ région k
+        # membership matrix (nr, n_sp) : membership[k,j]=1 if j ∈ region k
         membership   = np.zeros((nr, n_sp), dtype=np.float32)
         for k in range(nr):
             in_k = assignment == k
@@ -410,26 +337,14 @@ def greedy_group(aff_matrix, nr, rng):
         if len(remaining) == 0:
             break
 
-        # scores (n_remaining, nr) = affinité moyenne avec chaque région
+        # scores (n_remaining, nr) = average affinity with each region
         aff_sub = aff_matrix[remaining]                        # (n_rem, n_sp)
         scores  = (aff_sub @ membership.T) / region_sizes.T   # (n_rem, nr)
         assignment[remaining] = scores.argmax(axis=1)
 
     return assignment
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Étape C — GT régions + homogénéité + features de régions
-# ══════════════════════════════════════════════════════════════════════════════
-
 def compute_region_gt(assignment, sp_gt_feat, sp_pixel_counts_feat, nr):
-    """
-    Calcule le label majoritaire et l'homogénéité de chaque région.
-    Homogénéité : ≤ HOMOG_TOL (5 %) de pixels non-majoritaires (footnote 3).
-
-    sp_gt_feat            : (n_sp,) GT label par feat index (0=non labellisé)
-    sp_pixel_counts_feat  : (n_sp,) nombre de pixels par superpixel (feat index)
-    """
     region_labels = np.zeros(nr, dtype=np.int32)
     region_homog  = np.zeros(nr, dtype=bool)
 
@@ -440,7 +355,7 @@ def compute_region_gt(assignment, sp_gt_feat, sp_pixel_counts_feat, nr):
         pix_cts  = sp_pixel_counts_feat[members]
         labels   = sp_gt_feat[members]
 
-        # ne garder que les SP labellisés
+        # keep only labeled SP
         lmask    = labels > 0
         if not lmask.any():
             continue
@@ -449,7 +364,7 @@ def compute_region_gt(assignment, sp_gt_feat, sp_pixel_counts_feat, nr):
         lbl_lbl  = labels[lmask]
         total    = lbl_pix.sum()
 
-        # label majoritaire (en pixels)
+        # label majoritaire (in pixels)
         best_l, best_n = 0, 0
         for l in LABEL_IDS:
             n_l = lbl_pix[lbl_lbl == l].sum()
@@ -465,14 +380,6 @@ def compute_region_gt(assignment, sp_gt_feat, sp_pixel_counts_feat, nr):
 
 def compute_region_features(extractor, segments, sp_ids_array,
                              assignment, nr):
-    """
-    Calcule les 78 features sur le masque pixel de chaque région.
-
-    extractor    : FeatureExtractor déjà initialisé pour l'image
-    segments     : (H, W) tableau de SP IDs
-    sp_ids_array : (n_sp,) SP IDs triés (feat index → SP ID dans segments)
-    assignment   : (n_sp,) région k pour chaque feat index
-    """
     reg_features   = np.zeros((nr, 78), dtype=np.float32)
     reg_pixel_sizes = np.zeros(nr, dtype=np.int32)
 
@@ -480,7 +387,7 @@ def compute_region_features(extractor, segments, sp_ids_array,
         feat_members  = np.where(assignment == k)[0]
         if not len(feat_members):
             continue
-        actual_sp_ids = sp_ids_array[feat_members]           # vrais IDs dans segments
+        actual_sp_ids = sp_ids_array[feat_members]           # true IDs in segments
         region_mask   = np.isin(segments, actual_sp_ids)
         n_pix         = int(region_mask.sum())
         reg_pixel_sizes[k] = n_pix
@@ -490,10 +397,6 @@ def compute_region_features(extractor, segments, sp_ids_array,
     return reg_features, reg_pixel_sizes
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Main
-# ══════════════════════════════════════════════════════════════════════════════
-
 def main():
     rng = np.random.default_rng(42)
 
@@ -502,22 +405,20 @@ def main():
     train_indices = train_ds._i
     print(f"Dataset: {len(ds)} images  |  train (cluster_images): {len(train_indices)}")
 
-    # ── Étape A : entraîner le modèle d'affinité ──────────────────────────────
     aff_model_path = MODEL_DIR / "affinity_adaboost.pkl"
     if aff_model_path.exists():
-        print("\nModèle d'affinité déjà présent — chargement...")
+        print("Modèle d'affinité déjà présent — chargement...")
         with open(aff_model_path, "rb") as f:
             affinity_clf = pickle.load(f)
     else:
-        print("\nÉtape A : entraînement du modèle d'affinité...")
+        print("Étape A : entraînement du modèle d'affinité...")
         X_aff, y_aff = sample_affinity_pairs(ds, train_indices, rng)
         affinity_clf  = train_affinity_model(X_aff, y_aff)
         with open(aff_model_path, "wb") as f:
             pickle.dump(affinity_clf, f)
         print(f"  → sauvegardé dans {aff_model_path}")
 
-    # ── Étapes B+C : générer les hypothèses pour toutes les images ────────────
-    print(f"\nÉtapes B+C : hypothèses pour {len(ds)} images "
+    print(f"Étapes B+C : hypothèses pour {len(ds)} images "
           f"(nr ∈ {NR_VALUES}, {N_GREEDY_IT} itérations glouton)...")
 
     skipped, done, cached = 0, 0, 0
@@ -538,27 +439,26 @@ def main():
 
         feats       = ft["features"].astype(np.float32)       # (n_sp, 78)
         sp_ids_arr  = ft.get("sp_ids",
-                             np.unique(sp["segments"]))        # (n_sp,) SP IDs réels
+                             np.unique(sp["segments"]))        # (n_sp,) true SP IDs
         sp_ids_arr  = np.asarray(sp_ids_arr)
-        sp_gt_sp    = ft["sp_labels"]                          # indexé par vrai SP ID
-        sp_gt_feat  = sp_gt_sp[sp_ids_arr]                    # indexé par feat index
+        sp_gt_sp    = ft["sp_labels"]                          # indexed by true SP ID
+        sp_gt_feat  = sp_gt_sp[sp_ids_arr]                    # indexed by feat index
 
         segments    = sp["segments"]
         n_sp        = len(feats)
 
-        # Compte pixels par superpixel (indexé par feat index)
         full_counts        = np.bincount(segments.flatten(),
                                          minlength=int(segments.max())+1)
         sp_pixel_counts_feat = full_counts[sp_ids_arr]
 
-        # Matrice d'affinité (n_sp × n_sp)
+        # affinity matrix (n_sp × n_sp)
         aff_matrix = compute_affinity_matrix(feats, affinity_clf)
 
-        # Extracteur de features (lignes Hough calculées une seule fois)
+        # feature extractor (Hough lines computed once)
         image     = ds._load_image(ds._img_paths[stem.lower()])
         extractor = FeatureExtractor(image)
 
-        # Générer une hypothèse par valeur de nr
+        # generate one hypothesis per nr value
         hypotheses = []
         for nr in NR_VALUES:
             assignment  = greedy_group(aff_matrix, nr, rng)
@@ -588,10 +488,9 @@ def main():
         })
         done += 1
 
-    print(f"\nTerminé : {done} générés  |  {cached} déjà en cache  |  {skipped} ignorés")
-    print(f"→ {HYPO_CACHE}/  ({len(list(HYPO_CACHE.glob('*.npy')))} fichiers)")
+    print(f"Terminé : {done} générés  |  {cached} déjà en cache  |  {skipped} ignorés")
+    print(f" {HYPO_CACHE}/  ({len(list(HYPO_CACHE.glob('*.npy')))} fichiers)")
 
-    # ── Vérification rapide sur la première image ──────────────────────────────
     _, _, meta0 = ds[0]
     hypo_data   = np.load(HYPO_CACHE / f"{Path(meta0['imname']).stem}.npy",
                           allow_pickle=True).item()
@@ -602,8 +501,7 @@ def main():
               f"homog_frac={homog_frac:.2f}  "
               f"labels={np.unique(h['region_labels'])}")
 
-    # ── Statistiques globales ─────────────────────────────────────────────────
-    print("\nStatistiques globales sur les hypothèses générées :")
+    print("Statistiques globales sur les hypothèses générées :")
     total_homog, total_regions = 0, 0
     for p in list(HYPO_CACHE.glob("*.npy"))[:50]:
         d = np.load(p, allow_pickle=True).item()
@@ -615,7 +513,7 @@ def main():
               f"{total_homog/total_regions*100:.1f}%  "
               f"(papier : ~40 %)")
 
-    print("\ndone → data/hypotheses/  data/models/affinity_adaboost.pkl")
+    print("\ndone : data/hypotheses/  data/models/affinity_adaboost.pkl")
 
 
 if __name__ == "__main__":

@@ -91,6 +91,38 @@ information without computing it explicitly.
 Features are computed once and cached in `data/features/` to avoid recomputing
 them at each training run.
 
+### Step 4: AdaBoost classification
+
+`04_adaboost.py` implements the baseline classifier using the 78 features extracted previously. We use an AdaBoost model with 200 decision trees of depth 3 (approximately 8 leaf nodes), as suggested in the original paper. 
+
+This model treats each superpixel independently. It achieves about 83% pixel accuracy, which is a solid baseline but lacks spatial consistency since it does not consider the relationship between neighboring superpixels.
+
+### Step 4b: Multi-Hypothesis classification (MultiH)
+
+`04b_multiH_classify.py` implements the more advanced pipeline from the 2005 paper. Instead of relying on a single segmentation, we generate multiple segmentation hypotheses (different levels of detail).
+
+The method trains:
+1. A **label classifier** to predict the geometric class of a region.
+2. A **homogeneity classifier** to estimate if a region is likely to contain only one geometric class.
+
+Predictions from all hypotheses are fused to produce the final labels. This approach is more robust to segmentation errors and improves accuracy to nearly 86%, matching the results reported in the paper.
+
+### Step 5: Graph Neural Network (GNN)
+
+`05_gnn.py` and its variants (up to `05d_gnn_improved_multiH.py`) explore modern deep learning approaches. We use a **Graph Attention Network (GAT)** to model the superpixel graph. 
+
+The GNN allows superpixels to "communicate" with their neighbors, enabling the model to learn spatial context. The improved version (`05d`) also incorporates the class probabilities from the MultiH model as additional features, further boosting performance by combining classical and modern techniques.
+
+### Step 6: Belief Propagation (BP)
+
+`06a_belief_propagation.py` implements a classic Graphical Model approach. We define a Conditional Random Field (CRF) over the superpixel graph. 
+
+The model uses:
+- **Unary potentials**: Based on the AdaBoost or MultiH probabilities.
+- **Pairwise potentials**: Encouraging neighboring superpixels with similar colors or positions to have the same label.
+
+We use the max-product algorithm (Belief Propagation) to find the most likely assignment of labels. This method effectively smoothes the results and removes isolated classification errors.
+
 ## Requirements
 
 ```
@@ -101,17 +133,21 @@ Main dependencies: numpy, scipy, opencv-python, scikit-image, matplotlib, tqdm, 
 
 ## Usage
 
-Run the steps in order:
+Run the scripts in order to reproduce the full pipeline:
 
-```
-python 01_explore_dataset.py
-python 02_superpixels.py
-python 03_features.py
-```
+1. **Preprocessing**:
+   ```bash
+   python 01_explore_dataset.py
+   python 02_superpixels.py
+   python 03_features.py
+   python 03b_segmentation_hypotheses.py
+   ```
 
-Steps 2 and 3 use a file cache so they can be interrupted and resumed. Once
-`data/superpixels/` and `data/features/` are populated, all subsequent steps
-load from cache and do not recompute.
+2. **Classification & Inference**:
+   - **Baseline**: `python 04_adaboost.py`
+   - **Paper Pipeline**: `python 04b_multiH_classify.py`
+   - **GNN Approach**: `python 05d_gnn_improved_multiH.py`
+   - **CRF/BP Approach**: `python 06a_belief_propagation.py`
 
 ## Reference
 

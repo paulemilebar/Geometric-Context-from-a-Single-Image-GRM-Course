@@ -1,38 +1,3 @@
-"""
-04b_multiH_classify.py  —  Hoiem 2005, Section 3.2  (classifieur région + fusion MultiH)
-═══════════════════════════════════════════════════════════════════════════════════════════
-
-Pipeline (à lancer APRÈS 03b_segmentation_hypotheses.py) :
-
-  1. Chargement des régions  (depuis data/hypotheses/)
-     • données d'entraînement = régions des 50 cluster_images
-
-  2. Entraînement de DEUX classifieurs AdaBoost (section 3.2)
-     • Label classifier   : features de région → P(ground | x), P(vert | x), P(sky | x)
-       — formulation one-vs-rest, poids proportionnels à la surface en pixels
-     • Homogeneity clf    : features de région → P(région homogène)
-       — binaire : homogène (0 ou 1 classe) vs mixte (plusieurs classes)
-
-  3. Fusion multi-hypothèses — Équation 2 du papier
-                                         nh
-     C(y_i = v | x)  =   Σ   P(y_j = v | x, h_ji) · P(h_ji | x)
-                          j=1
-
-     Pour chaque superpixel i :
-       • On itère sur les 9 hypothèses j
-       • h_ji = région contenant i dans l'hypothèse j
-       • P(y_j = v | ...)  = label_clf.predict_proba(region_features_j)
-       • P(h_ji | x)       = homog_clf.predict_proba(region_features_j)[homog class]
-       • Les poids P(h_ji) sont normalisés à 1 sur les 9 hypothèses
-
-  4. Évaluation : précision pixel (identique à 04_adaboost.py pour comparaison)
-
-Résultats attendus (Tableau 4 du papier) :
-  SPixel   → ~83 %  (= 04_adaboost.py avec 50 images d'entraînement)
-  OneH     → ~83 %  (une seule hypothèse, nr=9)
-  MultiH   → ~86 %  (9 hypothèses fusionnées)  ← cible de ce script
-"""
-
 import sys, pickle
 import numpy as np
 import matplotlib; matplotlib.use("Agg")
@@ -54,16 +19,12 @@ HYPO_CACHE   = Path("data/hypotheses")
 MODEL_DIR    = Path("data/models"); MODEL_DIR.mkdir(parents=True, exist_ok=True)
 OUT_DIR      = Path("outputs");     OUT_DIR.mkdir(exist_ok=True)
 
-# ── Hyper-paramètres section 3.2 ─────────────────────────────────────────────
-N_EST_LABEL  = 200    # estimateurs AdaBoost pour le label classifier
-N_EST_HOMOG  = 200    # estimateurs AdaBoost pour le homogeneity classifier
-MAX_DEPTH    = 3      # max_depth ≈ 8 feuilles (section 3.2 : "eight-node decision trees")
-MIN_PIX      = 50     # ignorer les régions de moins de MIN_PIX pixels
+N_EST_LABEL  = 200 
+N_EST_HOMOG  = 200 
+MAX_DEPTH    = 3      
+MIN_PIX      = 50     
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Chargement des données d'entraînement (régions)
-# ══════════════════════════════════════════════════════════════════════════════
 
 def load_hypothesis(imname):
     p = HYPO_CACHE / f"{Path(imname).stem}.npy"
@@ -71,13 +32,6 @@ def load_hypothesis(imname):
 
 
 def load_region_training_data(ds, train_indices):
-    """
-    Retourne :
-      X        : (N_regions, 78)  features de chaque région
-      y_label  : (N_regions,)     label majoritaire (1/2/3), 0 = non labellisé
-      y_homog  : (N_regions,)     1 = homogène, 0 = mixte
-      weights  : (N_regions,)     poids = taille en pixels (section 3.2)
-    """
     X, y_label, y_homog, weights = [], [], [], []
     missing = 0
 
@@ -111,19 +65,15 @@ def load_region_training_data(ds, train_indices):
     y_label = np.array(y_label, dtype=np.int32)
     y_homog = np.array(y_homog, dtype=np.int32)
     weights = np.array(weights, dtype=np.float64)
-    weights /= weights.mean()    # normaliser pour la stabilité numérique
+    weights /= weights.mean()    
 
     return X, y_label, y_homog, weights
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Entraînement des deux classifieurs (section 3.2)
-# ══════════════════════════════════════════════════════════════════════════════
 from sklearn.base import clone
 import numpy as np
 
 class ManualOneVsRest:
-    """Un OneVsRest personnalisé qui ignore les bugs de routage de scikit-learn 1.4+"""
     def __init__(self, base_estimator):
         self.base_estimator = base_estimator
         self.estimators_ = []
@@ -152,20 +102,14 @@ class ManualOneVsRest:
 
 
 def train_label_classifier(X, y, weights):
-    """
-    Label likelihood : P(label = v | region features), one-vs-rest.
-    Poids = surface en pixels de la région (section 3.2).
-    """
     base_ada = AdaBoostClassifier(
         estimator=DecisionTreeClassifier(max_depth=MAX_DEPTH),
         n_estimators=N_EST_LABEL,
         random_state=42,
     )
     
-    # On utilise notre classe maison au lieu de celle de scikit-learn
     clf = ManualOneVsRest(base_ada)
 
-    # On relabellise 1→0, 2→1, 3→2 pour que les classes soient [0, 1, 2]
     y0 = y - 1
     clf.fit(X, y0, sample_weight=weights)
     return clf
@@ -173,10 +117,6 @@ def train_label_classifier(X, y, weights):
 
 
 def train_homog_classifier(X, y_homog, weights):
-    """
-    Homogeneity likelihood : P(région homogène | features).
-    Binaire : 0 = mixte, 1 = homogène.
-    """
     clf = AdaBoostClassifier(
         estimator=DecisionTreeClassifier(max_depth=MAX_DEPTH),
         n_estimators=N_EST_HOMOG,
@@ -186,20 +126,9 @@ def train_homog_classifier(X, y_homog, weights):
     return clf
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Prédiction multi-hypothèses — Équation 2
-# ══════════════════════════════════════════════════════════════════════════════
-
 def predict_image_multiH(hd, label_clf, homog_clf, return_confidence=False):
-    """
-    Applique l'Équation 2 pour une image.
-    Retourne : preds (n_sp,) label prédit (1/2/3) pour chaque superpixel feat-indexé.
-    Si return_confidence est True, retourne (preds, confidence).
-    """
     n_sp       = hd["n_sp"]
-    # confidence accumulée sur les 9 hypothèses : (n_sp, 3)
     confidence = np.zeros((n_sp, 3), dtype=np.float64)
-    # somme des poids d'homogénéité pour normalisation
     homog_sum  = np.zeros(n_sp, dtype=np.float64)
 
     for h in hd["hypotheses"]:
@@ -210,18 +139,13 @@ def predict_image_multiH(hd, label_clf, homog_clf, return_confidence=False):
         if nr_actual == 0:
             continue
 
-        # Prédictions par région
-        # label_proba (nr, 3) — classes dans l'ordre ground/vert/sky (0/1/2 interne)
         label_proba = label_clf.predict_proba(reg_feats)   # (nr, 3)
 
-        # homog_proba (nr,) — P(homogène)
-        # homog_clf.classes_ = [0, 1] → proba[:,1] = P(homogène)
         if len(homog_clf.classes_) == 2:
             homog_proba = homog_clf.predict_proba(reg_feats)[:, 1]
         else:
             homog_proba = np.ones(nr_actual, dtype=np.float32)
 
-        # Accumuler par superpixel : C(y_i = v) += P(label=v | h_j) * P(h_j | x)
         for k in range(nr_actual):
             sp_in_region          = np.where(assignment == k)[0]
             if not len(sp_in_region):
@@ -229,11 +153,9 @@ def predict_image_multiH(hd, label_clf, homog_clf, return_confidence=False):
             confidence[sp_in_region] += label_proba[k]  * homog_proba[k]
             homog_sum[sp_in_region]  += homog_proba[k]
 
-    # Normaliser par la somme des poids d'homogénéité (section 3.2)
     denom = np.maximum(homog_sum, 1e-8)[:, None]
     confidence /= denom
 
-    # label prédit = argmax + 1  (pour revenir en 1-indexed)
     preds = confidence.argmax(axis=1).astype(np.int32) + 1
     if return_confidence:
         return preds, confidence
@@ -241,7 +163,6 @@ def predict_image_multiH(hd, label_clf, homog_clf, return_confidence=False):
 
 
 def pixel_accuracy_multiH(ds, indices, label_clf, homog_clf):
-    """Précision pixel — identique au protocole de 04_adaboost.py."""
     correct = total = 0
     per_class = {l: [0, 0] for l in LABEL_IDS}
 
@@ -258,7 +179,6 @@ def pixel_accuracy_multiH(ds, indices, label_clf, homog_clf):
         segments   = sp["segments"]
         preds      = predict_image_multiH(hd, label_clf, homog_clf)  # (n_sp,)
 
-        # Carte de prédiction pixel (feat index → pixels)
         pred_map = np.zeros(segments.shape, dtype=np.int32)
         for i, sp_id in enumerate(sp_ids_arr):
             if i < len(preds):
@@ -278,12 +198,7 @@ def pixel_accuracy_multiH(ds, indices, label_clf, homog_clf):
     return overall, per_cls
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Comparaison OneH vs MultiH (Tableau 4)
-# ══════════════════════════════════════════════════════════════════════════════
-
 def pixel_accuracy_oneH(ds, indices, label_clf, homog_clf, nr_target=9):
-    """Même calcul mais avec une seule hypothèse (nr=9), comme la colonne 'OneH'."""
     correct = total = 0
 
     for idx in indices:
@@ -294,7 +209,7 @@ def pixel_accuracy_oneH(ds, indices, label_clf, homog_clf, nr_target=9):
         if hd is None or sp is None or ft is None:
             continue
 
-        # Trouver l'hypothèse avec le nr le plus proche de nr_target
+        #find the hypothesis with the nr closest to nr_target
         best_h = min(hd["hypotheses"], key=lambda h: abs(h["nr"] - nr_target))
 
         sp_ids_arr = ft.get("sp_ids", np.unique(sp["segments"]))
@@ -322,10 +237,6 @@ def pixel_accuracy_oneH(ds, indices, label_clf, homog_clf, nr_target=9):
 
     return correct / max(total, 1)
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Visualisation
-# ══════════════════════════════════════════════════════════════════════════════
 
 def plot_predictions(ds, indices, label_clf, homog_clf, save_path, n=6):
     fig, axes = plt.subplots(3, n, figsize=(4*n, 12))
@@ -409,10 +320,6 @@ def plot_confusion(ds, indices, label_clf, homog_clf, save_path):
     plt.close()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 5-fold cross-validation sur les 250 cv_images (protocole Hoiem 2005)
-# ══════════════════════════════════════════════════════════════════════════════
-
 def cross_validate_multiH(ds, cv_indices, n_folds=5):
     fold_size = len(cv_indices) // n_folds
     accs = []
@@ -439,10 +346,6 @@ def cross_validate_multiH(ds, cv_indices, n_folds=5):
     return accs
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Main
-# ══════════════════════════════════════════════════════════════════════════════
-
 def main():
     ds = HoiemDataset(root_dir=DATASET_DIR)
     train_ds, test_ds = ds.get_split()
@@ -450,11 +353,10 @@ def main():
     test_indices  = test_ds._i
     print(f"Dataset: {len(ds)} images  |  train: {len(train_indices)}  |  test: {len(test_indices)}")
 
-    # ── 1) Charger les données de régions (50 images d'entraînement) ──────────
-    print("\nChargement des données de régions (cluster_images)...")
+    print("\nLoading region data (cluster_images)...")
     X_tr, y_lbl, y_hmg, weights = load_region_training_data(ds, train_indices)
-    print(f"  {len(X_tr)} régions de training chargées")
-    print(f"  Distribution labels : "
+    print(f"  {len(X_tr)} training regions loaded")
+    print(f"  Label distribution : "
           f"ground={(y_lbl==1).mean():.2f}  "
           f"vert={(y_lbl==2).mean():.2f}  "
           f"sky={(y_lbl==3).mean():.2f}")
@@ -464,22 +366,19 @@ def main():
         print("ERREUR : aucune région trouvée. Avez-vous lancé 03b_segmentation_hypotheses.py ?")
         return
 
-    # ── 2) Entraîner les deux classifieurs ────────────────────────────────────
-    print(f"\nEntraînement label classifier  (n_est={N_EST_LABEL}, OvR AdaBoost)...")
+    print(f"\nTraining label classifier  (n_est={N_EST_LABEL}, OvR AdaBoost)...")
     label_clf = train_label_classifier(X_tr, y_lbl, weights)
     print(f"  train label acc = {(label_clf.predict(X_tr)+1 == y_lbl).mean():.4f}")
 
-    print(f"\nEntraînement homogeneity classifier  (n_est={N_EST_HOMOG})...")
+    print(f"\nTraining homogeneity classifier  (n_est={N_EST_HOMOG})...")
     homog_clf = train_homog_classifier(X_tr, y_hmg, weights)
     print(f"  train homog acc = {(homog_clf.predict(X_tr) == y_hmg).mean():.4f}")
 
-    # Sauvegarder les classifieurs
     with open(MODEL_DIR / "multiH_classifiers.pkl", "wb") as f:
         pickle.dump({"label_clf": label_clf, "homog_clf": homog_clf}, f)
-    print(f"  → modèles sauvegardés dans {MODEL_DIR}/multiH_classifiers.pkl")
+    print(f"  → models saved in {MODEL_DIR}/multiH_classifiers.pkl")
 
-    # ── 3) Évaluation MultiH sur le test set complet (250 images) ────────────
-    print("\nÉvaluation MultiH sur le test set (250 images)...")
+    print("\nMultiH evaluation on test set (250 images)...")
     acc_multi, per_cls_multi = pixel_accuracy_multiH(
         ds, test_indices, label_clf, homog_clf)
     print(f"\n  MultiH pixel accuracy : {acc_multi:.4f}")
@@ -487,12 +386,10 @@ def main():
     print(f"    vertical : {per_cls_multi[2]:.4f}")
     print(f"    sky      : {per_cls_multi[3]:.4f}")
 
-    # ── 4) Comparaison OneH (une seule hypothèse nr=9) ────────────────────────
-    print("\nÉvaluation OneH (nr=9, sans fusion) sur 100 images...")
+    print("\nOneH evaluation (nr=9, no fusion) on 100 images...")
     acc_one = pixel_accuracy_oneH(ds, test_indices[:100], label_clf, homog_clf, nr_target=9)
     print(f"  OneH pixel accuracy : {acc_one:.4f}")
 
-    # ── 5) Tableau récapitulatif (Tableau 4 du papier) ────────────────────────
     print("\n" + "═"*55)
     print("  Tableau comparatif  (Tableau 4, Hoiem 2005)")
     print("═"*55)
@@ -507,21 +404,18 @@ def main():
     print(f"  {'Hoiem 2005 (papier)':<25} {'~86 %':>15}")
     print("═"*55)
 
-    # ── 6) 5-fold cross-validation sur les 250 cv_images ─────────────────────
     print("\n5-fold cross-validation sur les 250 cv_images (protocole Hoiem)...")
     fold_accs = cross_validate_multiH(ds, test_indices, n_folds=5)
     print(f"\n  CV résultats : {[f'{a:.4f}' for a in fold_accs]}")
     print(f"  mean = {np.mean(fold_accs):.4f}   std = {np.std(fold_accs):.4f}")
     print(f"  Hoiem 2005 : 0.8600")
 
-    # ── 7) Visualisations ────────────────────────────────────────────────────
     print("\nGénération des visualisations...")
     plot_predictions(ds, test_indices, label_clf, homog_clf,
                      OUT_DIR / "step4b_predictions.png")
     plot_confusion(ds, test_indices, label_clf, homog_clf,
                    OUT_DIR / "step4b_confusion.png")
 
-    # Feature importance du label classifier (premier estimateur OvR = ground)
     try:
         from features import FEATURE_NAMES
         importances = np.zeros(78)
@@ -543,7 +437,7 @@ def main():
     except Exception as e:
         print(f"  [warn] feature importance plot ignoré : {e}")
 
-    print("\ndone → outputs/step4b_*.png  data/models/multiH_classifiers.pkl")
+    print("done : outputs/step4b_*.png  data/models/multiH_classifiers.pkl")
 
 
 if __name__ == "__main__":
